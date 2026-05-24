@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Local-only configuration
+.envrc
+.env
+
+plans/
+temp/
+CLAUDE.md

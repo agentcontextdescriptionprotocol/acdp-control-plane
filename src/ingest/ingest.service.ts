@@ -1,0 +1,44 @@
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { AppConfigService } from '../config/app-config.service';
+import { AcdpWebhookEvent } from '../contracts/acdp';
+import { EventProcessorService } from '../processor/event-processor.service';
+import { verifyWebhookSignature } from './hmac';
+
+@Injectable()
+export class IngestService {
+  private readonly logger = new Logger(IngestService.name);
+
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly processor: EventProcessorService,
+  ) {}
+
+  async handle(body: Buffer, signatureHeader: string, headerRunId?: string): Promise<void> {
+    if (!verifyWebhookSignature(body, signatureHeader ?? '', this.config.webhookSecret)) {
+      throw new UnauthorizedException('Invalid webhook signature');
+    }
+
+    let payload: AcdpWebhookEvent;
+    try {
+      payload = JSON.parse(body.toString('utf8')) as AcdpWebhookEvent;
+    } catch {
+      throw new BadRequestException('Invalid JSON payload');
+    }
+
+    if (typeof payload !== 'object' || payload === null) {
+      throw new BadRequestException('Payload must be an object');
+    }
+    if (!payload.type) {
+      throw new BadRequestException('Missing required field: type');
+    }
+    if (!payload.agent_id) {
+      throw new BadRequestException('Missing required field: agent_id');
+    }
+    if (!payload.registry_authority) {
+      throw new BadRequestException('Missing required field: registry_authority');
+    }
+
+    const runId = headerRunId ?? payload.run_id;
+    await this.processor.process(payload, runId);
+  }
+}
