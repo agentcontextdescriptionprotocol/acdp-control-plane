@@ -1,0 +1,21 @@
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY tsconfig.json nest-cli.json ./
+COPY src ./src
+COPY drizzle ./drizzle
+RUN npm run build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev --no-audit --no-fund
+
+COPY --from=builder /app/dist ./dist
+COPY drizzle ./drizzle
+
+EXPOSE 3001
+CMD ["node", "dist/main.js"]

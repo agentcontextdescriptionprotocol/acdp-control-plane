@@ -1,0 +1,138 @@
+import { WebhookService } from './webhook.service';
+
+function mockInstrumentation() {
+  return { webhookDeliveriesTotal: { inc: jest.fn() } } as any;
+}
+
+describe('WebhookService', () => {
+  let webhookRepo: any;
+  let deliveryRepo: any;
+  let svc: WebhookService;
+  let originalFetch: typeof fetch;
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    webhookRepo = {
+      create: jest.fn(),
+      list: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      listActive: jest.fn(),
+      findById: jest.fn(),
+    };
+    deliveryRepo = {
+      create: jest.fn().mockImplementation((input) =>
+        Promise.resolve({
+          id: 'del-1',
+          ...input,
+          status: 'pending',
+          attempts: 0,
+        }),
+      ),
+      markDelivered: jest.fn().mockResolvedValue(undefined),
+      markFailed: jest.fn().mockResolvedValue(undefined),
+      listPending: jest.fn().mockResolvedValue([]),
+    };
+
+    originalFetch = global.fetch;
+    fetchMock = jest.fn();
+    (global as any).fetch = fetchMock;
+
+    svc = new WebhookService(webhookRepo, deliveryRepo, mockInstrumentation());
+  });
+
+  afterEach(() => {
+    (global as any).fetch = originalFetch;
+  });
+
+  it('only delivers to subscriptions whose events list matches (empty list = all)', async () => {
+    webhookRepo.listActive.mockResolvedValue([
+      { id: 'wh-all', url: 'https://a.example/h', secret: 's1', events: [] },
+      { id: 'wh-match', url: 'https://b.example/h', secret: 's2', events: ['context_published'] },
+      { id: 'wh-other', url: 'https://c.example/h', secret: 's3', events: ['context_archived'] },
+    ]);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await svc.fireEvent({
+      event: 'context_published',
+      runId: 'r-1',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
+
+    expect(deliveryRepo.create).toHaveBeenCalledTimes(2);
+    const webhookIds = deliveryRepo.create.mock.calls.map(
+      (c: any[]) => c[0].webhookId,
+    );
+    expect(webhookIds.sort()).toEqual(['wh-all', 'wh-match']);
+  });
+
+  it('signs the body with HMAC-SHA256 and sets X-ACDP-Signature + X-ACDP-Event headers', async () => {
+    webhookRepo.listActive.mockResolvedValue([
+      { id: 'wh-1', url: 'https://x.example/h', secret: 'shh', events: [] },
+    ]);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await svc.fireEvent({
+      event: 'context_published',
+      runId: 'r-1',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
+    // Wait a microtask for the fire-and-forget delivery to run
+    await new Promise((r) => setImmediate(r));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://x.example/h',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'X-ACDP-Event': 'context_published',
+          'X-ACDP-Signature': expect.stringMatching(/^sha256=[a-f0-9]{64}$/),
+        }),
+      }),
+    );
+  });
+
+  it('marks delivery successful on 2xx and increments the delivered counter', async () => {
+    webhookRepo.listActive.mockResolvedValue([
+      { id: 'wh-1', url: 'https://x.example/h', secret: 's', events: [] },
+    ]);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await svc.fireEvent({
+      event: 'context_published',
+      runId: 'r-1',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(deliveryRepo.markDelivered).toHaveBeenCalledWith('del-1', 200);
+  });
+
+  it('swallows repository errors so fire-and-forget callers do not crash', async () => {
+    webhookRepo.listActive.mockRejectedValue(new Error('db down'));
+    await expect(
+      svc.fireEvent({
+        event: 'context_published',
+        runId: 'r-1',
+        timestamp: '2026-01-01T00:00:00Z',
+      }),
+    ).resolves.toBeUndefined();
+    expect(deliveryRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('does not deliver when no active webhook matches the event', async () => {
+    webhookRepo.listActive.mockResolvedValue([
+      { id: 'wh-1', url: 'https://x.example/h', secret: 's', events: ['context_archived'] },
+    ]);
+
+    await svc.fireEvent({
+      event: 'context_published',
+      runId: 'r-1',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
+
+    expect(deliveryRepo.create).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
