@@ -64,6 +64,16 @@ export class AppConfigService implements OnModuleInit {
   readonly jwtTtlSeconds = readNumber('JWT_TTL_SECONDS', 3600);
   readonly challengeTtlSeconds = readNumber('CHALLENGE_TTL_SECONDS', 300);
 
+  // Auth-store backend selection — drives both #8 persistent stores
+  // and the #12 issuance ledger. Validated against the allowed set.
+  readonly authPersistence: 'memory' | 'postgres' = (() => {
+    const raw = (process.env.AUTH_PERSISTENCE ?? 'memory').toLowerCase();
+    if (raw === 'memory' || raw === 'postgres') return raw;
+    throw new Error(
+      `AUTH_PERSISTENCE must be 'memory' or 'postgres' (got '${raw}')`,
+    );
+  })();
+
   // HMAC secret used to verify incoming registry webhooks. Empty = skip (dev).
   readonly webhookSecret = process.env.WEBHOOK_SECRET ?? '';
 

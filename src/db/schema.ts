@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -145,6 +146,48 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
 });
 
+// Append-only audit ledger of token-issuance attempts. Decisions are
+// recorded for both `mint` (successful JWT) and `reject_*` (each
+// validation failure point) so operators can answer compliance
+// questions like "how many tokens were issued for sub=X today" or
+// "show me all unauthorized attempts from agent Y last hour".
+//
+// `prev_hash` / `entry_hash` build a SHA-256 hash chain across rows
+// in `id` order so post-hoc tampering with a row becomes detectable
+// at audit time (the read path can recompute the chain). This is
+// not Merkle-tree-grade tamper evidence — it does not protect
+// against an attacker who can replay-rewrite the entire tail — but
+// it's enough to detect surgical edits at audit time, and is a
+// foundation for stronger commitments later.
+export const issuanceLedger = pgTable(
+  'issuance_ledger',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    jti: varchar('jti', { length: 64 }),
+    sub: text('sub'),
+    iss: text('iss'),
+    iat: bigint('iat', { mode: 'number' }),
+    exp: bigint('exp', { mode: 'number' }),
+    signerIp: varchar('signer_ip', { length: 64 }),
+    decision: varchar('decision', { length: 32 }).notNull(),
+    decisionDetail: text('decision_detail'),
+    // Hex SHA-256 of the prior row's `entryHash` (or 64 zeros for the
+    // first row). NULL for legacy backfills.
+    prevHash: varchar('prev_hash', { length: 64 }),
+    // Hex SHA-256 of (prevHash || canonical(this row)).
+    entryHash: varchar('entry_hash', { length: 64 }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    subIdx: index('issuance_ledger_sub_idx').on(t.sub),
+    jtiIdx: index('issuance_ledger_jti_idx').on(t.jti),
+    decisionIdx: index('issuance_ledger_decision_idx').on(t.decision),
+    createdIdx: index('issuance_ledger_created_idx').on(t.createdAt),
+  }),
+);
+
 export type ContextEvent = typeof contextEvents.$inferSelect;
 export type NewContextEvent = typeof contextEvents.$inferInsert;
 export type Run = typeof runs.$inferSelect;
@@ -155,3 +198,5 @@ export type Registry = typeof registries.$inferSelect;
 export type Webhook = typeof webhooks.$inferSelect;
 export type NewWebhook = typeof webhooks.$inferInsert;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type IssuanceLedgerEntry = typeof issuanceLedger.$inferSelect;
+export type NewIssuanceLedgerEntry = typeof issuanceLedger.$inferInsert;

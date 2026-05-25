@@ -15,7 +15,9 @@ import {
   HttpStatus,
   Logger,
   Post,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 
 import {
   ChallengeRequestDto,
@@ -48,19 +50,34 @@ export class AuthController {
   @Public()
   @Post('token')
   @HttpCode(HttpStatus.OK)
-  token(@Body() body: TokenRequestDto): TokenResponseDto {
-    const out = this.issuer.issueToken({
-      agentDid: body.agent_id,
-      keyId: body.key_id,
-      nonce: body.nonce,
-      expiresAt: body.expires_at,
-      algorithm: body.algorithm,
-      signature: body.signature,
-    });
+  token(@Body() body: TokenRequestDto, @Req() req: Request): TokenResponseDto {
+    const out = this.issuer.issueToken(
+      {
+        agentDid: body.agent_id,
+        keyId: body.key_id,
+        nonce: body.nonce,
+        expiresAt: body.expires_at,
+        algorithm: body.algorithm,
+        signature: body.signature,
+      },
+      { signerIp: extractIp(req) },
+    );
     return {
       token: out.token,
       token_type: out.tokenType,
       expires_at: out.expiresAt,
     };
   }
+}
+
+/**
+ * Best-effort caller IP for audit. Prefers `X-Forwarded-For` (first
+ * hop) when present — Express's `req.ip` only reflects the proxy
+ * unless `app.set('trust proxy', ...)` is configured upstream.
+ */
+function extractIp(req: Request): string | undefined {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string') return xff.split(',')[0]!.trim();
+  if (Array.isArray(xff) && xff[0]) return xff[0];
+  return req.ip;
 }

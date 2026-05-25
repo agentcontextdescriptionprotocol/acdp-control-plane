@@ -3,6 +3,7 @@ import { AuthGuard } from './auth.guard';
 import { AuthController } from './auth.controller';
 import { ChallengeStore } from './challenge-store.service';
 import { ConfigModule } from '../config/config.module';
+import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
 import { TokenIssuer } from './token-issuer.service';
 
@@ -26,7 +27,7 @@ export class AuthModule {
     const providers = [
       AuthGuard,
       ...(issuanceEnabled
-        ? [ChallengeStore, PinnedKeysService, TokenIssuer]
+        ? [ChallengeStore, PinnedKeysService, TokenIssuer, IssuanceLedgerService]
         : []),
     ];
     return {
