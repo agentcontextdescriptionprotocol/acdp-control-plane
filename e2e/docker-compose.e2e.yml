@@ -1,0 +1,162 @@
+# End-to-end stack: real agents (hitting OpenAI), real registries, real
+# control plane, real Postgres. Run from this directory:
+#
+#   ./run-e2e.sh
+#
+# The compose file builds from sibling repos in
+# ../../agentcontextdescriptionprotocol/{acdp-playground,acdp-registry-rs,acdp-rs}
+# so the layout must be:
+#
+#   agentcontextdescriptionprotocol/
+#     ├── acdp-control-plane/   (this repo)
+#     │   └── e2e/              (this directory)
+#     ├── acdp-playground/
+#     ├── acdp-registry-rs/
+#     └── acdp-rs/
+
+name: acdp-e2e
+
+networks:
+  acdp_e2e: {}
+
+services:
+  # ── Postgres for the control plane ─────────────────────────────────
+  postgres-cp:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acdp
+      POSTGRES_PASSWORD: acdp
+      POSTGRES_DB: acdp_control_plane
+    ports: ["5434:5432"]   # host 5434 to avoid clashes with other postgres instances
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks: [acdp_e2e]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acdp"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # ── Control plane (NestJS — this repo) ─────────────────────────────
+  control-plane:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports: ["3001:3001"]
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://acdp:acdp@postgres-cp:5432/acdp_control_plane
+      AUTH_API_KEYS: ${CP_API_KEY:-e2e-cp-key}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-playground-dev-secret}
+      PLAYGROUND_URL: http://playground:8000
+      CORS_ORIGIN: http://localhost:3000
+      STREAM_HUB_STRATEGY: memory
+      LOG_LEVEL: ${CP_LOG_LEVEL:-info}
+    networks: [acdp_e2e]
+    depends_on:
+      postgres-cp:
+        condition: service_healthy
+    healthcheck:
+      # Use 127.0.0.1 not localhost — alpine's busybox getaddrinfo prefers
+      # ::1 (IPv6) but Nest listens on 0.0.0.0 (IPv4 only).
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3001/healthz | grep -q '\"ok\":true'"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ── Registry A (Rust) ──────────────────────────────────────────────
+  # Uses a patched build (e2e/registry-permissive/Dockerfile) that flips
+  # the webhook URL SSRF check to allow http:// — required for the
+  # registry → http://playground:8000/webhooks/acdp hop. The webhook
+  # itself is enabled via ACDP_REGISTRY_WEBHOOK__ENABLED below; that
+  # overrides the `[webhook] enabled = false` in the mounted TOML.
+  registry-a:
+    build:
+      context: ../..
+      dockerfile: acdp-control-plane/e2e/registry-permissive/Dockerfile
+      args:
+        STORAGE_FEATURE: storage-sqlite
+    ports: ["8100:8100"]
+    environment:
+      ACDP_REGISTRY_CONFIG: /app/config.toml
+      ACDP_REGISTRY_WEBHOOK__ENABLED: "true"
+      ACDP_REGISTRY_WEBHOOK__URL: http://playground:8000/webhooks/acdp
+      ACDP_REGISTRY_WEBHOOK__SECRET: ${WEBHOOK_SECRET:-playground-dev-secret}
+      ACDP_REGISTRY_AUTH__JWT_SECRET: ${ACDP_REGISTRY_JWT_SECRET:-cGxheWdyb3VuZC1zZWNyZXQtMzItYnl0ZXMtb2YtdGVzdC1qd3Q=}
+      RUST_LOG: info,acdp=info,acdp_registry=info
+    volumes:
+      - ./config/registry-a.toml:/app/config.toml:ro
+    tmpfs:
+      - /app/data
+    networks: [acdp_e2e]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # ── Registry B (Rust) ──────────────────────────────────────────────
+  registry-b:
+    build:
+      context: ../..
+      dockerfile: acdp-control-plane/e2e/registry-permissive/Dockerfile
+      args:
+        STORAGE_FEATURE: storage-sqlite
+    ports: ["8200:8200"]
+    environment:
+      ACDP_REGISTRY_CONFIG: /app/config.toml
+      ACDP_REGISTRY_WEBHOOK__ENABLED: "true"
+      ACDP_REGISTRY_WEBHOOK__URL: http://playground:8000/webhooks/acdp
+      ACDP_REGISTRY_WEBHOOK__SECRET: ${WEBHOOK_SECRET:-playground-dev-secret}
+      ACDP_REGISTRY_AUTH__JWT_SECRET: ${ACDP_REGISTRY_JWT_SECRET:-cGxheWdyb3VuZC1zZWNyZXQtMzItYnl0ZXMtb2YtdGVzdC1qd3Q=}
+      RUST_LOG: info,acdp=info,acdp_registry=info
+    volumes:
+      - ./config/registry-b.toml:/app/config.toml:ro
+    tmpfs:
+      - /app/data
+    networks: [acdp_e2e]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8200/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    # NOTE: no depends_on: playground (would create a cycle with
+    # playground.depends_on.registry-b). The registry's webhook worker
+    # retries with exponential backoff, so the first delivery hitting a
+    # not-yet-ready playground is harmless.
+
+  # ── Playground (Python — agents that hit the LLM) ──────────────────
+  playground:
+    build:
+      context: ../..
+      dockerfile: acdp-playground/Dockerfile
+    ports: ["8000:8000"]
+    environment:
+      REGISTRY_A_URL: http://registry-a:8100
+      REGISTRY_B_URL: http://registry-b:8200
+      REGISTRY_A_AUTHORITY: registry-a.playground.local
+      REGISTRY_B_AUTHORITY: registry-b.playground.local
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      # Playground's own bridge to the control plane (used by
+      # notify_run_started / notify_run_complete / forward_webhook).
+      CONTROL_PLANE_URL: http://control-plane:3001
+      CONTROL_PLANE_HMAC_SECRET: ${WEBHOOK_SECRET:-playground-dev-secret}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-playground-dev-secret}
+      LOG_FORMAT: ${LOG_FORMAT:-pretty}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks: [acdp_e2e]
+    depends_on:
+      registry-a:
+        condition: service_healthy
+      registry-b:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/healthz | grep -q 'ok'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

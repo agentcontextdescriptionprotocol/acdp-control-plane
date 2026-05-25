@@ -34,11 +34,30 @@ export class IngestService {
     if (!payload.agent_id) {
       throw new BadRequestException('Missing required field: agent_id');
     }
+    // registry_authority is required, but the ACDP registry's WebhookEvent
+    // doesn't include it explicitly — fall back to extracting it from
+    // ctx_id (format: `acdp://<authority>/<id>`) so the event still flows.
     if (!payload.registry_authority) {
-      throw new BadRequestException('Missing required field: registry_authority');
+      const extracted = extractAuthorityFromCtxId(payload.ctx_id);
+      if (!extracted) {
+        throw new BadRequestException(
+          'Missing required field: registry_authority (and ctx_id has no authority)',
+        );
+      }
+      payload.registry_authority = extracted;
     }
 
     const runId = headerRunId ?? payload.run_id;
     await this.processor.process(payload, runId);
   }
+}
+
+/**
+ * Pull the authority out of an ACDP context URI. Returns undefined if the
+ * input isn't shaped like `acdp://<authority>/<id>`.
+ */
+export function extractAuthorityFromCtxId(ctxId: unknown): string | undefined {
+  if (typeof ctxId !== 'string' || !ctxId.startsWith('acdp://')) return undefined;
+  const [authority] = ctxId.slice('acdp://'.length).split('/');
+  return authority || undefined;
 }
