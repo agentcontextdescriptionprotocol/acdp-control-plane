@@ -108,6 +108,31 @@ describe('Ingest pipeline (integration)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('accepts registry-shaped events that omit registry_authority by extracting it from ctx_id', async () => {
+    const runId = 'run-ingest-registry-shape';
+    // Matches the actual ACDP registry WebhookEvent: no explicit
+    // registry_authority on the wire — the authority is encoded in ctx_id.
+    const payload = {
+      type: 'context_published',
+      ctx_id: 'acdp://registry-z.example/01H7X4Z',
+      lineage_id: 'lin-1',
+      agent_id: 'did:web:agent-z.example',
+      context_type: 'data_snapshot',
+      visibility: 'public',
+      version: 1,
+      derived_from: [],
+      created_at: new Date().toISOString(),
+    };
+    const res = await ctx.client.ingest(payload, { runId, secret: SECRET });
+    expect(res.status).toBe(204);
+
+    const run = (await ctx.client.getRun(runId)) as Record<string, unknown>;
+    expect(run.registries).toEqual(['registry-z.example']);
+
+    const registries = (await ctx.client.listRegistries()) as { data: unknown[] };
+    expect(registries.data.length).toBe(1);
+  });
+
   it('correlates multiple events by run_id (X-Run-Id header), incrementing contexts_count', async () => {
     const runId = 'run-ingest-multi';
     await ctx.client.ingest(

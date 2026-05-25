@@ -14,9 +14,12 @@ export class AgentsController {
     return { data: agents, total: agents.length };
   }
 
-  @Get(':did(.*)')
+  // `*did` catches the full DID path. NestJS 11 / path-to-regexp v6+ uses
+  // this syntax in place of the older `:did(.*)` regex form.
+  @Get('*did')
   @ApiOperation({ summary: 'Agent detail + context count.' })
-  async getAgent(@Param('did') did: string) {
+  async getAgent(@Param('did') didParts: string[] | string) {
+    const did = Array.isArray(didParts) ? didParts.join('/') : didParts;
     const agent = await this.agentRepo.findByDid(did);
     if (!agent) throw new NotFoundException(`agent ${did} not found`);
     return agent;
