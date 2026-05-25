@@ -10,12 +10,20 @@ export class ContextsController {
 
   constructor(private readonly registryRepo: RegistryRepository) {}
 
-  @Get(':ctxId(.*)')
+  // Catch-all path parameter. NestJS 11 / path-to-regexp v6+ uses the
+  // `*name` syntax for "match everything under this prefix" (the older
+  // `:ctxId(.*)` regex syntax is gone). The `ctxId` param arrives as a
+  // string[] of decoded path segments.
+  @Get('*ctxId')
   @ApiOperation({
     summary:
       'Federated context retrieval — proxied to the registry that authored it. ctx_id format: acdp://<authority>/<uuid>',
   })
-  async getContext(@Param('ctxId') ctxId: string, @Res() res: Response): Promise<void> {
+  async getContext(
+    @Param('ctxId') ctxIdParts: string[] | string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const ctxId = Array.isArray(ctxIdParts) ? ctxIdParts.join('/') : ctxIdParts;
     const stripped = ctxId.replace(/^acdp:\/\//, '');
     const [authority] = stripped.split('/');
     if (!authority) {
