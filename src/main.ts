@@ -40,18 +40,23 @@ async function bootstrap() {
     }),
   );
 
-  if (config.isDevelopment) {
+  if (config.swaggerEnabled) {
     const swagger = new DocumentBuilder()
       .setTitle('ACDP Control Plane')
       .setDescription(
         'Control plane for the Agent Context Description Protocol — ingests registry events, ' +
-          'correlates runs, broadcasts SSE.',
+          'correlates runs, broadcasts SSE, and acts as an IdP for federated bearer tokens.',
       )
       .setVersion(config.clientVersion)
       .addBearerAuth()
+      .addTag('auth', 'Challenge / token issuance (IdP for federated registries).')
+      .addTag('agents', 'Agent registry and capability discovery.')
+      .addTag('contexts', 'Context lineage browsing.')
+      .addTag('runs', 'Run lifecycle.')
+      .addTag('ingest', 'Webhook ingestion from registries.')
       .build();
     const document = SwaggerModule.createDocument(app, swagger);
-    SwaggerModule.setup('docs', app, document);
+    SwaggerModule.setup(config.swaggerPath, app, document);
   }
 
   app.enableShutdownHooks();
