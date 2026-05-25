@@ -1,0 +1,54 @@
+# E2E-only registry-a config. Adapted from
+# acdp-playground/config/registry-a.toml with two changes:
+#   - `auth.jwt_secret` is set inline (env-var override via
+#     ACDP_REGISTRY_AUTH__JWT_SECRET isn't reliably applied by this
+#     registry build).
+#   - `[webhook] enabled = true` and the URL is pinned to
+#     http://playground:8000/webhooks/acdp. The registry's stock SSRF
+#     policy rejects http:// URLs; the patched build in
+#     e2e/registry-permissive/Dockerfile allows it.
+
+[registry]
+authority = "registry-a.playground.local"
+port      = 8100
+bind      = "0.0.0.0"
+profiles  = ["acdp-registry-core", "acdp-registry-discovery"]
+cross_registry_resolution = true
+
+[registry.tls]
+enabled = false
+
+[registry.cors]
+allowed_origins = []
+
+[storage]
+backend         = "sqlite"
+sqlite_path     = "/app/data/registry-a.db"
+max_connections = 10
+
+[auth]
+enabled                = true
+did_methods            = ["did:web"]
+anonymous_public_reads = true
+token_ttl_seconds      = 3600
+challenge_ttl_seconds  = 300
+token_leeway_seconds   = 30
+# Pinned inline (base64-encoded 32-byte secret); E2E only.
+jwt_secret             = "cGxheWdyb3VuZC1zZWNyZXQtMzItYnl0ZXMtb2YtdGVzdC1qd3Q="
+
+[webhook]
+enabled         = true
+url             = "http://playground:8000/webhooks/acdp"
+# secret comes from ACDP_REGISTRY_WEBHOOK__SECRET (compose env).
+secret          = "playground-dev-secret"
+timeout_seconds = 5
+max_retries     = 3
+queue_capacity  = 1024
+
+[limits]
+max_payload_bytes           = 1048576
+max_embedded_bytes          = 65536
+idempotency_key_ttl_seconds = 86400
+
+[playground]
+enabled = true
