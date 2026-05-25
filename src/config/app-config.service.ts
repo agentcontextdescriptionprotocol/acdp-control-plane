@@ -48,6 +48,22 @@ export class AppConfigService implements OnModuleInit {
   // Auth — comma-separated API keys. Empty = auth disabled (dev only).
   readonly authApiKeys = readStringList('AUTH_API_KEYS');
 
+  // ── Token issuance (Phase-5: V2 Seam IdP foundation) ───────────────────
+  //
+  // When `tokenIssuanceEnabled` is true the control plane mounts
+  // `POST /auth/challenge` + `POST /auth/token` and issues HS256 JWTs
+  // signed with `jwtSecret`. The JWT shape matches the registry's
+  // BearerClaims so the two issuers stay interoperable.
+  //
+  // `CONTROL_PLANE_PINNED_KEYS` populates the agent → public-key
+  // directory used to verify challenge signatures (loaded by
+  // PinnedKeysService at boot).
+  readonly tokenIssuanceEnabled = readBoolean('TOKEN_ISSUANCE_ENABLED', false);
+  readonly jwtSecret = process.env.JWT_SECRET ?? '';
+  readonly jwtAuthority = process.env.JWT_AUTHORITY ?? 'control-plane.local';
+  readonly jwtTtlSeconds = readNumber('JWT_TTL_SECONDS', 3600);
+  readonly challengeTtlSeconds = readNumber('CHALLENGE_TTL_SECONDS', 300);
+
   // HMAC secret used to verify incoming registry webhooks. Empty = skip (dev).
   readonly webhookSecret = process.env.WEBHOOK_SECRET ?? '';
 
@@ -117,6 +133,23 @@ export class AppConfigService implements OnModuleInit {
 
     if (this.dbPoolMax < 2) {
       throw new Error('DB_POOL_MAX must be >= 2 to avoid connection pool starvation');
+    }
+
+    if (this.tokenIssuanceEnabled) {
+      // Minimum 32 bytes for HS256 per RFC 7518 §3.2.
+      const secretBytes = Buffer.byteLength(this.jwtSecret, 'utf-8');
+      if (secretBytes < 32) {
+        throw new Error(
+          `JWT_SECRET must be at least 32 bytes when TOKEN_ISSUANCE_ENABLED=true ` +
+            `(got ${secretBytes})`,
+        );
+      }
+      if (this.jwtTtlSeconds < 60) {
+        throw new Error('JWT_TTL_SECONDS must be >= 60');
+      }
+      if (this.challengeTtlSeconds < 30) {
+        throw new Error('CHALLENGE_TTL_SECONDS must be >= 30');
+      }
     }
   }
 }
