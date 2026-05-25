@@ -42,7 +42,7 @@ import { WebhookService } from './webhooks/webhook.service';
   imports: [
     ConfigModule,
     DatabaseModule,
-    AuthModule,
+    AuthModule.forRoot(),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [AppConfigService],
