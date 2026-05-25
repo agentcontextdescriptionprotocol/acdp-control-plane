@@ -1,0 +1,36 @@
+services:
+  control-plane:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://acdp:acdp@postgres/acdp_control_plane
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      PLAYGROUND_URL: ${PLAYGROUND_URL:-http://playground:8000}
+      AUTH_API_KEYS: ${CP_API_KEY:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      STREAM_HUB_STRATEGY: ${STREAM_HUB_STRATEGY:-memory}
+      REDIS_URL: ${REDIS_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acdp
+      POSTGRES_PASSWORD: acdp
+      POSTGRES_DB: acdp_control_plane
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "acdp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

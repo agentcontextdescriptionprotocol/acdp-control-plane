@@ -1,0 +1,152 @@
+import { createHmac } from 'node:crypto';
+import { createTestApp, TestAppContext } from '../helpers/test-app';
+
+const SECRET = 'integration-test-secret';
+
+function makeEvent(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    type: 'context_published',
+    ctx_id: 'acdp://registry-a.example/ctx-001',
+    lineage_id: 'lineage-001',
+    agent_id: 'did:web:agent-1.example',
+    context_type: 'task',
+    visibility: 'public',
+    version: 1,
+    derived_from: [],
+    registry_authority: 'registry-a.example',
+    scenario_id: 'scenario-x',
+    created_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
+describe('Ingest pipeline (integration)', () => {
+  let ctx: TestAppContext;
+
+  beforeAll(async () => {
+    ctx = await createTestApp({ webhookSecret: SECRET });
+  });
+
+  beforeEach(async () => {
+    await ctx.cleanup();
+  });
+
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  it('accepts valid HMAC-signed events and persists the raw event + run + agent + registry', async () => {
+    const runId = 'run-ingest-1';
+    const payload = makeEvent();
+
+    const res = await ctx.client.ingest(payload, { runId, secret: SECRET });
+    expect(res.status).toBe(204);
+
+    // Run record exists with the right scenario + registry list
+    const run = (await ctx.client.getRun(runId)) as Record<string, unknown>;
+    expect(run.runId).toBe(runId);
+    expect(run.scenarioId).toBe('scenario-x');
+    expect(run.registries).toEqual(['registry-a.example']);
+    expect(run.contextsCount).toBe(1);
+
+    // Cross-run event listing includes it
+    const events = (await ctx.client.listEvents()) as { data: unknown[] };
+    expect(events.data.length).toBe(1);
+
+    // Agent + registry registries populated
+    const agents = (await ctx.client.listAgents()) as { data: unknown[] };
+    expect(agents.data.length).toBe(1);
+    const registries = (await ctx.client.listRegistries()) as { data: unknown[] };
+    expect(registries.data.length).toBe(1);
+  });
+
+  it('rejects events with a bad HMAC signature (401)', async () => {
+    const payload = makeEvent();
+    const body = JSON.stringify(payload);
+    const wrongSig = createHmac('sha256', 'wrong-secret').update(body).digest('hex');
+
+    const res = await ctx.client.requestRaw('POST', '/ingest/acdp', {
+      rawBody: body,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-acdp-signature': `sha256=${wrongSig}`,
+      },
+    });
+    expect(res.status).toBe(401);
+
+    // Nothing persisted
+    const events = (await ctx.client.listEvents()) as { data: unknown[] };
+    expect(events.data.length).toBe(0);
+  });
+
+  it('rejects requests without a signature header (401)', async () => {
+    const payload = makeEvent();
+    const res = await ctx.client.requestRaw('POST', '/ingest/acdp', {
+      body: payload,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects malformed JSON (400)', async () => {
+    const validSig = createHmac('sha256', SECRET).update('not json').digest('hex');
+    const res = await ctx.client.requestRaw('POST', '/ingest/acdp', {
+      rawBody: 'not json',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-acdp-signature': `sha256=${validSig}`,
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects payloads missing required fields (400)', async () => {
+    const payload = { type: 'context_published' }; // missing agent_id + registry_authority
+    const res = await ctx.client.ingest(payload as Record<string, unknown>, {
+      secret: SECRET,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('correlates multiple events by run_id (X-Run-Id header), incrementing contexts_count', async () => {
+    const runId = 'run-ingest-multi';
+    await ctx.client.ingest(
+      makeEvent({ ctx_id: 'acdp://registry-a.example/c1' }),
+      { runId, secret: SECRET },
+    );
+    await ctx.client.ingest(
+      makeEvent({ ctx_id: 'acdp://registry-a.example/c2' }),
+      { runId, secret: SECRET },
+    );
+    await ctx.client.ingest(
+      makeEvent({
+        ctx_id: 'acdp://registry-b.example/c3',
+        registry_authority: 'registry-b.example',
+      }),
+      { runId, secret: SECRET },
+    );
+
+    const run = (await ctx.client.getRun(runId)) as Record<string, unknown>;
+    expect(run.contextsCount).toBe(3);
+    expect(run.registries).toEqual(
+      expect.arrayContaining(['registry-a.example', 'registry-b.example']),
+    );
+    expect((run.registries as string[]).length).toBe(2);
+  });
+
+  it('GET /ingest/health is public and does not require auth', async () => {
+    const noAuth = await ctx.client.requestRaw('GET', '/ingest/health', {
+      headers: { Authorization: '' },
+    });
+    expect(noAuth.status).toBe(200);
+    expect(noAuth.body).toEqual({ ok: true });
+  });
+
+  it('accepts run_id embedded in payload when no X-Run-Id header is provided', async () => {
+    const runId = 'run-from-payload';
+    await ctx.client.ingest(makeEvent({ run_id: runId }), { secret: SECRET });
+
+    const run = (await ctx.client.getRun(runId)) as Record<string, unknown>;
+    expect(run.runId).toBe(runId);
+  });
+});
