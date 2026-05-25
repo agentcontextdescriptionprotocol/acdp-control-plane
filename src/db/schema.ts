@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -145,6 +146,52 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
 });
 
+// One-shot challenge nonces issued by /auth/challenge.
+// Take is atomic via DELETE..RETURNING so two concurrent /auth/token
+// callers cannot both consume the same nonce.
+export const authChallenges = pgTable(
+  'auth_challenges',
+  {
+    nonce: varchar('nonce', { length: 64 }).primaryKey(),
+    agentDid: text('agent_did').notNull(),
+    registryAuthority: varchar('registry_authority', { length: 255 }).notNull(),
+    signingInput: text('signing_input').notNull(),
+    // Unix seconds. Kept as bigint to outlast 32-bit timestamps in the
+    // worst case where an operator sets a long TTL.
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('auth_challenges_expires_idx').on(t.expiresAt),
+    agentIdx: index('auth_challenges_agent_idx').on(t.agentDid),
+  }),
+);
+
+// Revoked-token list. A JWT `jti` in this table is treated as invalid
+// by verifyJwt() until its `exp` passes, after which the sweeper drops
+// the row (the JWT is already expired by ordinary verification anyway).
+export const revokedTokens = pgTable(
+  'revoked_tokens',
+  {
+    jti: varchar('jti', { length: 64 }).primaryKey(),
+    sub: text('sub').notNull(),
+    iss: text('iss').notNull(),
+    // Unix seconds for parity with the rest of the auth wire types.
+    exp: bigint('exp', { mode: 'number' }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    revokedBy: text('revoked_by').notNull(),
+    reason: varchar('reason', { length: 64 }),
+  },
+  (t) => ({
+    expIdx: index('revoked_tokens_exp_idx').on(t.exp),
+    subIdx: index('revoked_tokens_sub_idx').on(t.sub),
+  }),
+);
+
 export type ContextEvent = typeof contextEvents.$inferSelect;
 export type NewContextEvent = typeof contextEvents.$inferInsert;
 export type Run = typeof runs.$inferSelect;
@@ -155,3 +202,7 @@ export type Registry = typeof registries.$inferSelect;
 export type Webhook = typeof webhooks.$inferSelect;
 export type NewWebhook = typeof webhooks.$inferInsert;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type AuthChallenge = typeof authChallenges.$inferSelect;
+export type NewAuthChallenge = typeof authChallenges.$inferInsert;
+export type RevokedToken = typeof revokedTokens.$inferSelect;
+export type NewRevokedToken = typeof revokedTokens.$inferInsert;

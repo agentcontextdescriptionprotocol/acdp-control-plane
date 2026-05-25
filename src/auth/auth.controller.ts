@@ -35,8 +35,8 @@ export class AuthController {
   @Public()
   @Post('challenge')
   @HttpCode(HttpStatus.OK)
-  challenge(@Body() body: ChallengeRequestDto): ChallengeResponseDto {
-    const rec = this.issuer.issueChallenge(body.agent_id);
+  async challenge(@Body() body: ChallengeRequestDto): Promise<ChallengeResponseDto> {
+    const rec = await this.issuer.issueChallenge(body.agent_id);
     return {
       nonce: rec.nonce,
       registry_authority: rec.registryAuthority,
@@ -48,8 +48,8 @@ export class AuthController {
   @Public()
   @Post('token')
   @HttpCode(HttpStatus.OK)
-  token(@Body() body: TokenRequestDto): TokenResponseDto {
-    const out = this.issuer.issueToken({
+  async token(@Body() body: TokenRequestDto): Promise<TokenResponseDto> {
+    const out = await this.issuer.issueToken({
       agentDid: body.agent_id,
       keyId: body.key_id,
       nonce: body.nonce,
