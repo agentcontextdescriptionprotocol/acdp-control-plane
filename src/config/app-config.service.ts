@@ -83,6 +83,21 @@ export class AppConfigService implements OnModuleInit {
   readonly jwtAuthority = process.env.JWT_AUTHORITY ?? 'control-plane.local';
   readonly jwtTtlSeconds = readNumber('JWT_TTL_SECONDS', 3600);
   readonly challengeTtlSeconds = readNumber('CHALLENGE_TTL_SECONDS', 300);
+
+  // JWT signing algorithm. `HS256` (default, backward-compatible) uses
+  // the symmetric `JWT_SECRET`. `EdDSA` uses an asymmetric Ed25519 keypair
+  // loaded from `JWT_PRIVATE_KEY_PEM`; the public key is published at
+  // `/.well-known/jwks.json` and embedded in issued tokens via the
+  // `kid` header so federated peers can fetch + verify without out-of-
+  // band secret distribution. See `src/auth/jwt-signing.ts`.
+  readonly jwtSigningAlg: 'HS256' | 'EdDSA' = (() => {
+    const raw = process.env.JWT_SIGNING_ALG ?? 'HS256';
+    if (raw === 'HS256' || raw === 'EdDSA') return raw;
+    throw new Error(`JWT_SIGNING_ALG must be 'HS256' or 'EdDSA' (got '${raw}')`);
+  })();
+  readonly jwtPrivateKeyPem = process.env.JWT_PRIVATE_KEY_PEM ?? '';
+  /** Optional override for the kid claim. When unset, derived from the key fingerprint. */
+  readonly jwtKid = process.env.JWT_KID ?? '';
   /**
    * Federation: tokens from these peer issuers are accepted by
    * `CrossIssuerValidator.verify`. Wire format documented in
@@ -181,13 +196,22 @@ export class AppConfigService implements OnModuleInit {
     }
 
     if (this.tokenIssuanceEnabled) {
-      // Minimum 32 bytes for HS256 per RFC 7518 §3.2.
-      const secretBytes = Buffer.byteLength(this.jwtSecret, 'utf-8');
-      if (secretBytes < 32) {
-        throw new Error(
-          `JWT_SECRET must be at least 32 bytes when TOKEN_ISSUANCE_ENABLED=true ` +
-            `(got ${secretBytes})`,
-        );
+      if (this.jwtSigningAlg === 'HS256') {
+        // Minimum 32 bytes for HS256 per RFC 7518 §3.2.
+        const secretBytes = Buffer.byteLength(this.jwtSecret, 'utf-8');
+        if (secretBytes < 32) {
+          throw new Error(
+            `JWT_SECRET must be at least 32 bytes when TOKEN_ISSUANCE_ENABLED=true ` +
+              `(got ${secretBytes})`,
+          );
+        }
+      } else {
+        // EdDSA: the PEM is required; jwt-signing.ts will validate the key type.
+        if (!this.jwtPrivateKeyPem.trim()) {
+          throw new Error(
+            'JWT_PRIVATE_KEY_PEM is required when JWT_SIGNING_ALG=EdDSA',
+          );
+        }
       }
       if (this.jwtTtlSeconds < 60) {
         throw new Error('JWT_TTL_SECONDS must be >= 60');

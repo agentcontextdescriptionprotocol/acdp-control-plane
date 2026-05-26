@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { OpaPolicyDecider, interpretOpa } from './opa-policy.decider';
 import { PolicyRequest } from './policy-decider';
 

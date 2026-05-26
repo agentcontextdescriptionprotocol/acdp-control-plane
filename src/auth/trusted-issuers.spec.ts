@@ -48,12 +48,29 @@ describe('parseTrustedIssuers', () => {
 
   it('rejects unsupported algorithms', () => {
     expect(() => parseTrustedIssuers(`reg-a|RS256|${OK_SECRET}`)).toThrow(
-      /HS256 supported/,
+      /unsupported alg/,
     );
   });
 
   it('rejects HS256 secret < 32 bytes', () => {
     expect(() => parseTrustedIssuers(`reg-a|HS256|${SHORT}`)).toThrow(/< 32 bytes/);
+  });
+
+  it('parses an EdDSA entry with a JWKS URL', () => {
+    const parsed = parseTrustedIssuers('reg-b|EdDSA|https://reg-b.example/.well-known/jwks.json');
+    expect(parsed).toEqual([
+      {
+        iss: 'reg-b',
+        alg: 'EdDSA',
+        jwksUrl: 'https://reg-b.example/.well-known/jwks.json',
+        audience: undefined,
+        requiredScope: undefined,
+      },
+    ]);
+  });
+
+  it('rejects EdDSA entries whose material is not a URL', () => {
+    expect(() => parseTrustedIssuers('reg-b|EdDSA|not-a-url')).toThrow(/must be a JWKS URL/);
   });
 });
 
