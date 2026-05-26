@@ -15,6 +15,7 @@ import {
   RevocationRepository,
 } from './revocation-repository';
 import { RevokeController } from './revoke.controller';
+import { SigningMaterialService } from './signing-material.service';
 import { TokenIssuer } from './token-issuer.service';
 import { AppConfigService } from '../config/app-config.service';
 
@@ -28,6 +29,9 @@ function fakeConfig(): any {
     jwtTtlSeconds: 3600,
     challengeTtlSeconds: 300,
     authSweepIntervalSeconds: 0, // disabled in tests
+    jwtSigningAlg: 'HS256',
+    jwtPrivateKeyPem: '',
+    jwtKid: '',
   };
 }
 
@@ -63,6 +67,7 @@ describe('RevokeController', () => {
         { provide: REVOCATION_REPOSITORY, useValue: revocations },
         ChallengeStore,
         PinnedKeysService,
+        SigningMaterialService,
         TokenIssuer,
       ],
     }).compile();

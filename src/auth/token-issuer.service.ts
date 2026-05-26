@@ -29,7 +29,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import jwt, { type SignOptions } from 'jsonwebtoken';
+import jwt, { type Algorithm, type SignOptions } from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
@@ -45,6 +45,7 @@ import {
   REVOCATION_REPOSITORY,
   RevocationRepository,
 } from './revocation-repository';
+import { SigningMaterialService } from './signing-material.service';
 
 const SUPPORTED_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'ecdsa-p256']);
 
@@ -80,6 +81,7 @@ export class TokenIssuer {
     private readonly config: AppConfigService,
     private readonly challenges: ChallengeStore,
     private readonly pinned: PinnedKeysService,
+    private readonly signing: SigningMaterialService,
     @Optional()
     @Inject(REVOCATION_REPOSITORY)
     private readonly revocations: RevocationRepository | null = null,
@@ -261,10 +263,10 @@ export class TokenIssuer {
   async verifyJwt(token: string): Promise<AcdpBearerClaims> {
     let decoded: AcdpBearerClaims;
     try {
-      decoded = jwt.verify(token, this.config.jwtSecret, {
-        algorithms: ['HS256'],
+      decoded = jwt.verify(token, this.signing.material.verifyKey, {
+        algorithms: [this.signing.material.algorithm as Algorithm],
         issuer: this.config.jwtAuthority,
-      }) as AcdpBearerClaims;
+      }) as unknown as AcdpBearerClaims;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new UnauthorizedException(`JWT verification failed: ${msg}`);
@@ -373,8 +375,14 @@ export class TokenIssuer {
         key_id: keyId,
       },
     };
-    const opts: SignOptions = { algorithm: 'HS256', noTimestamp: true };
-    const token = jwt.sign(claims, this.config.jwtSecret, opts);
+    const opts: SignOptions = {
+      algorithm: this.signing.material.algorithm as Algorithm,
+      noTimestamp: true,
+      // `kid` lets verifiers (local + federated) pick the right key during
+      // rotation. EdDSA publishes the matching kid in /.well-known/jwks.json.
+      keyid: this.signing.material.kid,
+    };
+    const token = jwt.sign(claims, this.signing.material.signingKey, opts);
     return { token, tokenType: 'Bearer', expiresAt: exp };
   }
 }

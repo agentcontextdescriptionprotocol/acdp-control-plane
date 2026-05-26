@@ -23,10 +23,12 @@
  * issuance.
  */
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import jwt from 'jsonwebtoken';
+import jwt, { type Algorithm } from 'jsonwebtoken';
 import { AppConfigService } from '../config/app-config.service';
+import { JwksClient } from './jwks-client';
+import { SigningMaterialService } from './signing-material.service';
 import { AcdpBearerClaims } from './token-issuer.service';
-import { TrustedIssuerRegistry } from './trusted-issuers';
+import { TrustedIssuer, TrustedIssuerRegistry } from './trusted-issuers';
 
 /** JWT claim shape with the federation extensions. */
 export interface FederatedClaims extends AcdpBearerClaims {
@@ -41,10 +43,13 @@ export interface FederatedClaims extends AcdpBearerClaims {
 @Injectable()
 export class CrossIssuerValidator {
   private readonly logger = new Logger(CrossIssuerValidator.name);
+  /** Lazily built per-issuer JWKS client (EdDSA peers only). */
+  private readonly jwksClients: Map<string, JwksClient> = new Map();
 
   constructor(
     private readonly config: AppConfigService,
     private readonly trusted: TrustedIssuerRegistry,
+    private readonly signing: SigningMaterialService,
   ) {}
 
   /**
@@ -53,7 +58,7 @@ export class CrossIssuerValidator {
    * `TokenIssuer.verifyJwt` — no shape-level discrimination of
    * failure reasons surfaces to the caller).
    */
-  verify(token: string): FederatedClaims {
+  async verify(token: string): Promise<FederatedClaims> {
     // Decode unverified to peek the iss; we then verify against the
     // matched issuer's material. The double-decode is unavoidable
     // because `jwt.verify`'s issuer option compares against a single
@@ -77,32 +82,64 @@ export class CrossIssuerValidator {
     return this.verifyTrusted(token, trusted);
   }
 
+  /**
+   * For an EdDSA peer, fetch the JWKS and select the right key. We
+   * prefer matching by `kid` (RFC 7515 §4.1.4 — the standard hint
+   * for verifiers). When the token doesn't carry one OR when no key
+   * matches, fall back to the first usable key — most peers have one
+   * active signing key at a time, so this is the common case.
+   */
+  private async resolveJwksKey(
+    trusted: TrustedIssuer,
+    token: string,
+  ): Promise<string> {
+    if (!trusted.jwksUrl) {
+      throw new Error(`trusted issuer '${trusted.iss}' is EdDSA but jwks_url is missing`);
+    }
+    let client = this.jwksClients.get(trusted.iss);
+    if (!client) {
+      client = new JwksClient(trusted.jwksUrl);
+      this.jwksClients.set(trusted.iss, client);
+    }
+    const kid = decodeKid(token);
+    return client.getSigningKey(kid);
+  }
+
   private verifyLocal(token: string): FederatedClaims {
     try {
-      const decoded = jwt.verify(token, this.config.jwtSecret, {
-        algorithms: ['HS256'],
+      const decoded = jwt.verify(token, this.signing.material.verifyKey, {
+        algorithms: [this.signing.material.algorithm as Algorithm],
         issuer: this.config.jwtAuthority,
         // Local tokens don't carry nbf today, but if a future mint adds
         // it the jsonwebtoken library will respect it automatically.
       });
-      return decoded as FederatedClaims;
+      return decoded as unknown as FederatedClaims;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new UnauthorizedException(`local JWT verification failed: ${msg}`);
     }
   }
 
-  private verifyTrusted(
+  private async verifyTrusted(
     token: string,
-    trusted: ReturnType<TrustedIssuerRegistry['get']> & object,
-  ): FederatedClaims {
+    trusted: TrustedIssuer,
+  ): Promise<FederatedClaims> {
     let decoded: FederatedClaims;
     try {
-      decoded = jwt.verify(token, trusted.secret, {
-        algorithms: [trusted.alg],
-        issuer: trusted.iss,
-        // jsonwebtoken enforces nbf by default when the claim is present.
-      }) as FederatedClaims;
+      if (trusted.alg === 'HS256') {
+        decoded = jwt.verify(token, trusted.secret ?? '', {
+          algorithms: ['HS256'],
+          issuer: trusted.iss,
+        }) as unknown as FederatedClaims;
+      } else {
+        // EdDSA via JWKS: fetch the right key by `kid` from the token
+        // header, then verify with EdDSA.
+        const verifyKey = await this.resolveJwksKey(trusted, token);
+        decoded = jwt.verify(token, verifyKey, {
+          algorithms: ['EdDSA' as Algorithm],
+          issuer: trusted.iss,
+        }) as unknown as FederatedClaims;
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new UnauthorizedException(`trusted JWT verification failed: ${msg}`);
@@ -144,6 +181,17 @@ function decodePeek(token: string): { iss?: string } | null {
     const d = jwt.decode(token);
     if (!d || typeof d !== 'object') return null;
     return { iss: (d as { iss?: unknown }).iss as string | undefined };
+  } catch {
+    return null;
+  }
+}
+
+function decodeKid(token: string): string | null {
+  try {
+    const d = jwt.decode(token, { complete: true });
+    if (!d) return null;
+    const kid = (d.header as { kid?: unknown }).kid;
+    return typeof kid === 'string' ? kid : null;
   } catch {
     return null;
   }

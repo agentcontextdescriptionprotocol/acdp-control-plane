@@ -16,6 +16,7 @@ import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IntrospectController } from './introspect.controller';
 import { IssuanceLedgerService } from './issuance-ledger.service';
+import { JwksController } from './jwks.controller';
 // PinnedKeysService is registered globally by AppModule (it's @Global()).
 // Don't add it to AuthModule's providers — would shadow the global one.
 import { PostgresChallengeRepository } from './postgres-challenge.repository';
@@ -25,6 +26,7 @@ import {
   RevocationRepository,
 } from './revocation-repository';
 import { RevokeController } from './revoke.controller';
+import { SigningMaterialService } from './signing-material.service';
 import { TokenIssuer } from './token-issuer.service';
 import {
   parseTrustedIssuers,
@@ -104,7 +106,7 @@ export class AuthModule {
     return {
       module: AuthModule,
       imports: [ConfigModule],
-      controllers: [AuthController, RevokeController, IntrospectController],
+      controllers: [AuthController, RevokeController, IntrospectController, JwksController],
       providers: [
         AuthGuard,
         challengeRepoProvider,
@@ -113,6 +115,7 @@ export class AuthModule {
         ChallengeStore,
         // PinnedKeysService: provided globally by AppModule (@Global()).
         DidWebResolverService,
+        SigningMaterialService,
         TokenIssuer,
         IssuanceLedgerService,
         AuthSweeperService,
@@ -120,6 +123,7 @@ export class AuthModule {
       ],
       exports: [
         AuthGuard,
+        SigningMaterialService,
         TokenIssuer,
         IssuanceLedgerService,
         CrossIssuerValidator,

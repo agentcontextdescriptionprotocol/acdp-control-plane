@@ -10,6 +10,7 @@ import { ChallengeStore } from './challenge-store.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IssuanceLedgerService } from './issuance-ledger.service';
+import { buildSigningMaterial } from './jwt-signing';
 import { PinnedKeysService } from './pinned-keys.service';
 import { TokenIssuer, AcdpBearerClaims } from './token-issuer.service';
 
@@ -50,7 +51,14 @@ describe('TokenIssuer', () => {
     const { privateKey, rawPubB64 } = generateAgent();
     priv = privateKey;
     pinned.load(`${did}=${rawPubB64}`);
-    issuer = new TokenIssuer(cfg, store, pinned, revocations, ledger);
+    issuer = new TokenIssuer(
+      cfg,
+      store,
+      pinned,
+      { material: buildSigningMaterial({ algorithm: 'HS256', hsSecret: cfg.jwtSecret }) } as any,
+      revocations,
+      ledger,
+    );
   });
 
   function signChallenge(signingInput: string): string {
