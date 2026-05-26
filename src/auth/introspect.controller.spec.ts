@@ -46,15 +46,22 @@ function tokenFor(claims: ReturnType<typeof freshClaims>, secret = SECRET): stri
   return jwt.sign(claims, secret, { algorithm: 'HS256', noTimestamp: true });
 }
 
-describe('IntrospectController', async () => {
+describe('IntrospectController', () => {
   let controller: IntrospectController;
 
   beforeEach(async () => {
     const cfg = fakeConfig();
+    // ChallengeStore needs CHALLENGE_REPOSITORY (post-#6 persistent stores).
+    // Wire in the in-memory impl so this spec stays a pure unit test.
+    const { CHALLENGE_REPOSITORY } = await import('./challenge-repository');
+    const { InMemoryChallengeRepository } = await import(
+      './in-memory-challenge.repository'
+    );
     const mod = await Test.createTestingModule({
       controllers: [IntrospectController],
       providers: [
         { provide: AppConfigService, useValue: cfg },
+        { provide: CHALLENGE_REPOSITORY, useValue: new InMemoryChallengeRepository() },
         ChallengeStore,
         PinnedKeysService,
         TokenIssuer,
