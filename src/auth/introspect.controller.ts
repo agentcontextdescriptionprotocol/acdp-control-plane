@@ -38,7 +38,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { IsString, MinLength } from 'class-validator';
-import { TokenIssuer } from './token-issuer.service';
+import { CrossIssuerValidator } from './cross-issuer-validator.service';
 
 export class IntrospectRequestDto {
   @ApiProperty({
@@ -94,7 +94,7 @@ export class IntrospectResponseDto {
 export class IntrospectController {
   private readonly logger = new Logger(IntrospectController.name);
 
-  constructor(private readonly issuer: TokenIssuer) {}
+  constructor(private readonly validator: CrossIssuerValidator) {}
 
   @Post('introspect')
   @HttpCode(HttpStatus.OK)
@@ -102,10 +102,10 @@ export class IntrospectController {
   @ApiOperation({
     summary: 'Introspect a bearer token (RFC 7662)',
     description:
-      'Verifies the JWT against this issuer\'s key (and — when the revocation ' +
-      'list is wired in — checks the deny-list). Returns canonical claims for ' +
-      'active tokens; returns just `{active: false}` for anything that fails ' +
-      'verification, per RFC 7662 §2.2 (no oracle discrimination).',
+      'Verifies the JWT against the local issuer secret OR any peer issuer ' +
+      'configured in `TRUSTED_ISSUERS` (federation). Returns canonical claims ' +
+      'for active tokens; returns just `{active: false}` for anything that ' +
+      'fails verification, per RFC 7662 §2.2 (no oracle discrimination).',
   })
   @ApiBody({ type: IntrospectRequestDto })
   @ApiOkResponse({ type: IntrospectResponseDto })
@@ -113,7 +113,11 @@ export class IntrospectController {
     @Body() body: IntrospectRequestDto,
   ): Promise<IntrospectResponseDto> {
     try {
-      const claims = await this.issuer.verifyJwt(body.token);
+      // CrossIssuerValidator dispatches on `iss` so tokens from
+      // trusted peer registries are also accepted here. Sync API —
+      // wrap in Promise.resolve to keep this method async-shaped
+      // for forward-compat with the introspection-cache work.
+      const claims = await Promise.resolve(this.validator.verify(body.token));
       return {
         active: true,
         iss: claims.iss,
