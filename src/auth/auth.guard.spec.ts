@@ -6,7 +6,7 @@ import { IS_PUBLIC_KEY } from './public.decorator';
 
 describe('AuthGuard', () => {
   let reflector: { getAllAndOverride: jest.Mock };
-  let config: { authApiKeys: string[] };
+  let config: { authApiKeys: string[]; authAdminApiKeys: string[] };
   let request: Record<string, any>;
   let guard: AuthGuard;
 
@@ -31,7 +31,10 @@ describe('AuthGuard', () => {
 
   beforeEach(() => {
     reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) };
-    config = { authApiKeys: ['valid-token-12345678'] };
+    config = {
+      authApiKeys: ['valid-token-12345678', 'admin-token-aaaaaaaa'],
+      authAdminApiKeys: ['admin-token-aaaaaaaa'],
+    };
     request = { headers: {} };
     guard = new AuthGuard(reflector as unknown as Reflector, config as AppConfigService);
   });
@@ -59,6 +62,13 @@ describe('AuthGuard', () => {
     expect(guard.canActivate(ctx(request))).toBe(true);
     expect(request.actorId).toBe('valid-to...');
     expect(request.actorType).toBe('api-key');
+    expect(request.actorIsAdmin).toBe(false);
+  });
+
+  it('flags admin-listed api keys as actorIsAdmin', () => {
+    request.headers.authorization = 'Bearer admin-token-aaaaaaaa';
+    expect(guard.canActivate(ctx(request))).toBe(true);
+    expect(request.actorIsAdmin).toBe(true);
   });
 
   it('accepts requests with a raw API key (no Bearer prefix)', () => {

@@ -5,11 +5,15 @@
  *   Body: { token: "<jwt>", reason?: "<one of RevocationReason>" }
  *
  * Behavior:
- *   - Caller must present a valid bearer token (AuthGuard); a token
- *     may revoke itself or another token in the same issuance.
- *     (Cross-tenant or admin-driven revocation is governed by the
- *     policy layer in #3; for now the AuthGuard's actor presence is
- *     enough.)
+ *   - Caller must present a valid bearer token (AuthGuard).
+ *   - Authorization: a caller may revoke a token IFF
+ *       (a) the caller is an admin (api key listed in
+ *           `AUTH_ADMIN_API_KEYS`), or
+ *       (b) the caller authenticated via JWT AND the token's `sub`
+ *           claim matches the caller's DID (`request.actorDid`).
+ *     Everyone else gets 403. Mirrors the registry's
+ *     `acdp-registry-auth::service::revoke_token` semantics
+ *     (`owner_of(jti) == caller_did`).
  *   - The endpoint returns 200 OK even for tokens that aren't valid
  *     under our key (RFC 7009 §2.2 — "unrecognized" must still
  *     succeed) to avoid an oracle that confirms token validity.
@@ -20,6 +24,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   HttpCode,
   HttpStatus,
   Logger,
@@ -110,7 +115,13 @@ export class RevokeController {
   @ApiOkResponse({ type: RevokeResponseDto })
   async revoke(
     @Body() body: RevokeRequestDto,
-    @Req() req: Request & { actorId?: string },
+    @Req()
+    req: Request & {
+      actorId?: string;
+      actorType?: 'api-key' | 'jwt';
+      actorIsAdmin?: boolean;
+      actorDid?: string;
+    },
   ): Promise<RevokeResponseDto> {
     // Try the full verify path first so we can record the canonical
     // claims (iss/exp from a valid token). If verification fails (bad
@@ -127,13 +138,32 @@ export class RevokeController {
       const decoded = this.issuer.decodeJwt(body.token);
       if (!decoded) {
         // Token didn't even decode — no jti to deny-list. Per RFC 7009,
-        // still return success.
+        // still return success. (Authorization gate is irrelevant when
+        // there's nothing identifiable to revoke.)
         this.logger.warn(
           `revoke called with un-decodable token by actor=${req.actorId ?? 'unknown'}`,
         );
         return { revoked: false };
       }
       claims = decoded;
+    }
+
+    // Authorization gate: admin OR self-revoke (JWT-authenticated caller
+    // whose DID matches claims.sub). Anything else is 403.
+    const isAdmin = req.actorIsAdmin === true;
+    const isSelfRevoke =
+      req.actorType === 'jwt' &&
+      typeof req.actorDid === 'string' &&
+      req.actorDid.length > 0 &&
+      req.actorDid === claims.sub;
+    if (!isAdmin && !isSelfRevoke) {
+      this.logger.warn(
+        `revoke 403: actor=${req.actorId ?? 'unknown'} ` +
+          `actorType=${req.actorType ?? '?'} target_sub=${claims.sub}`,
+      );
+      throw new ForbiddenException(
+        'caller is not authorized to revoke this token',
+      );
     }
 
     const reason: RevocationReason = body.reason ?? 'unspecified';
