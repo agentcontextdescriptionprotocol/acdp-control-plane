@@ -33,10 +33,14 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
-import { verifyEcdsaP256 } from './ecdsa-p256';
-import { verifyEd25519 } from './ed25519';
+import { DidWebResolverService } from './did-web/did-web-resolver.service';
+import {
+  publicKeyFromBase64Sec1,
+  verifyEcdsaP256,
+} from './ecdsa-p256';
+import { publicKeyFromBase64, verifyEd25519 } from './ed25519';
 import { IssuanceLedgerService } from './issuance-ledger.service';
-import { PinnedKeysService } from './pinned-keys.service';
+import { PinnedKey, PinnedKeysService } from './pinned-keys.service';
 import {
   REVOCATION_REPOSITORY,
   RevocationRepository,
@@ -80,6 +84,13 @@ export class TokenIssuer {
     @Inject(REVOCATION_REPOSITORY)
     private readonly revocations: RevocationRepository | null = null,
     @Optional() private readonly ledger: IssuanceLedgerService | null = null,
+    /**
+     * Optional did:web resolver. When present AND the agent isn't
+     * pinned, we fall through to resolve the key from the DID
+     * document. Pinned-keys-first is deliberate per deferred-plan
+     * §1: lets operators stage emergency key revocations locally.
+     */
+    @Optional() private readonly didWebResolver: DidWebResolverService | null = null,
   ) {}
 
   // ── Step 1 — challenge ────────────────────────────────────────────────
@@ -166,9 +177,23 @@ export class TokenIssuer {
       );
     }
 
-    // Resolve the public key. V1 uses the static pinned directory;
-    // V2 will plug in did:web / DID-resolver here.
-    const pinned = this.pinned.get(req.agentDid);
+    // Resolve the public key. Fallback chain per deferred-plan §1:
+    //   1. PinnedKeysService.get() — lets operators stage emergency
+    //      key revocations locally, overriding the DID document.
+    //   2. DidWebResolverService.resolveKey() — when an agent_id is
+    //      a did:web DID and isn't pinned, resolve from the DID
+    //      document's verificationMethod (SSRF-guarded; see
+    //      did-web/ssrf-guard.ts).
+    let pinned: PinnedKey | undefined = this.pinned.get(req.agentDid);
+    if (!pinned && this.didWebResolver && isDidWeb(req.agentDid)) {
+      pinned = await this.resolveDidWebKey(req, ctx);
+      if (!pinned) {
+        // resolveDidWebKey already logged + recorded the rejection.
+        throw new UnauthorizedException(
+          `agent_did '${req.agentDid}' could not be resolved via did:web`,
+        );
+      }
+    }
     if (!pinned) {
       this.ledger?.record({
         sub: req.agentDid,
@@ -279,6 +304,56 @@ export class TokenIssuer {
 
   // ── internals ────────────────────────────────────────────────────────
 
+  /**
+   * Resolve a `did:web` agent's public key via the DID document.
+   *
+   * Returns a `PinnedKey`-shaped record so the dispatch / verify
+   * path below stays uniform with the pinned-key case. Returns
+   * `undefined` (after logging + recording the ledger row) when
+   * resolution fails — caller treats that as the same final
+   * `reject_unpinned` outcome.
+   *
+   * Uses the request's `algorithm` to pick the verification method,
+   * which the resolver's pickVerificationMethod() enforces against
+   * `assertionMethod` and the method's key type (downgrade defense).
+   */
+  private async resolveDidWebKey(
+    req: { agentDid: string; keyId: string; algorithm: string },
+    ctx: IssueTokenContext,
+  ): Promise<PinnedKey | undefined> {
+    if (!this.didWebResolver) return undefined;
+    try {
+      const resolved = await this.didWebResolver.resolveKey(
+        req.keyId.startsWith(req.agentDid) ? req.keyId : `${req.agentDid}#${req.keyId}`,
+        req.algorithm as 'ed25519' | 'ecdsa-p256',
+      );
+      const publicKey =
+        resolved.algorithm === 'ed25519'
+          ? publicKeyFromBase64(resolved.publicKeyB64)
+          : publicKeyFromBase64Sec1(resolved.publicKeyB64);
+      this.logger.log(
+        `did:web fallback resolved ${req.agentDid} via ${resolved.keyId} (${resolved.algorithm})`,
+      );
+      return {
+        agentDid: req.agentDid,
+        algorithm: resolved.algorithm,
+        publicKey,
+        rawB64: resolved.publicKeyB64,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`did:web resolution failed for ${req.agentDid}: ${msg}`);
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_unpinned',
+        decisionDetail: `did:web resolution failed: ${msg}`,
+      });
+      return undefined;
+    }
+  }
+
   private mintJwt(agentDid: string, keyId: string): IssuedToken {
     const now = Math.floor(Date.now() / 1000);
     const exp = now + this.config.jwtTtlSeconds;
@@ -302,4 +377,8 @@ export class TokenIssuer {
     const token = jwt.sign(claims, this.config.jwtSecret, opts);
     return { token, tokenType: 'Bearer', expiresAt: exp };
   }
+}
+
+function isDidWeb(did: string): boolean {
+  return did.startsWith('did:web:');
 }

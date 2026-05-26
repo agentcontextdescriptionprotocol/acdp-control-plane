@@ -27,6 +27,8 @@ import { IngestService } from './ingest/ingest.service';
 import { MetricsController } from './metrics/metrics.controller';
 import { CorrelationIdMiddleware } from './middleware/correlation-id.middleware';
 import { RequestLoggerMiddleware } from './middleware/request-logger.middleware';
+import { PolicyModule } from './policy/policy.module';
+import { PolicyGuard } from './policy/policy.guard';
 import { EventProcessorService } from './processor/event-processor.service';
 import { RegistriesController } from './registries/registries.controller';
 import { RunsController } from './runs/runs.controller';
@@ -47,6 +49,7 @@ import { WebhookService } from './webhooks/webhook.service';
     ConfigModule,
     DatabaseModule,
     AuthModule.forRoot(),
+    PolicyModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [AppConfigService],
@@ -71,6 +74,9 @@ import { WebhookService } from './webhooks/webhook.service';
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
+    // PolicyGuard runs AFTER AuthGuard so subjectDid/tenantId are
+    // populated. Handlers without @CheckPolicy() pass through.
+    { provide: APP_GUARD, useClass: PolicyGuard },
 
     {
       provide: STREAM_HUB_STRATEGY,
