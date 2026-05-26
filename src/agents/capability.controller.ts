@@ -28,6 +28,7 @@ import {
 } from '@nestjs/swagger';
 import { IsISO8601, IsIn, IsString, MinLength } from 'class-validator';
 import { CheckPolicy } from '../policy/check-policy.decorator';
+import { CheckQuota } from '../quota/check-quota.decorator';
 import { CapabilityService } from './capability.service';
 
 const ALG_OPTIONS = ['ed25519'] as const;
@@ -89,6 +90,7 @@ export class CapabilityController {
 
   @Post()
   @CheckPolicy('capability.declare')
+  @CheckQuota('capability.declare')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Self-declare a capability for an agent (Ed25519-signed).',

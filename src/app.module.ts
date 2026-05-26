@@ -29,6 +29,8 @@ import { CorrelationIdMiddleware } from './middleware/correlation-id.middleware'
 import { RequestLoggerMiddleware } from './middleware/request-logger.middleware';
 import { PolicyModule } from './policy/policy.module';
 import { PolicyGuard } from './policy/policy.guard';
+import { QuotaModule } from './quota/quota.module';
+import { QuotaGuard } from './quota/quota.guard';
 import { EventProcessorService } from './processor/event-processor.service';
 import { RegistriesController } from './registries/registries.controller';
 import { RunsController } from './runs/runs.controller';
@@ -50,6 +52,7 @@ import { WebhookService } from './webhooks/webhook.service';
     DatabaseModule,
     AuthModule.forRoot(),
     PolicyModule,
+    QuotaModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [AppConfigService],
@@ -77,6 +80,10 @@ import { WebhookService } from './webhooks/webhook.service';
     // PolicyGuard runs AFTER AuthGuard so subjectDid/tenantId are
     // populated. Handlers without @CheckPolicy() pass through.
     { provide: APP_GUARD, useClass: PolicyGuard },
+    // QuotaGuard runs LAST in the guard chain so we don't burn a
+    // counter increment on requests that would have been denied by
+    // auth/policy anyway. Handlers without @CheckQuota() pass through.
+    { provide: APP_GUARD, useClass: QuotaGuard },
 
     {
       provide: STREAM_HUB_STRATEGY,
