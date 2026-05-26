@@ -7,34 +7,32 @@
  *
  * Config wire format: `TRUSTED_ISSUERS` is a comma-separated list of
  *
- *   <iss>|<alg>|<secret-or-jwks-url>[|audience][|scope]
+ *   HS256:   <iss>|HS256|<shared-secret>[|audience][|scope]
+ *   EdDSA:   <iss>|EdDSA|<jwks-url>[|audience][|scope]
  *
- * Example:
+ * Examples:
  *
- *   TRUSTED_ISSUERS=registry-a.example|HS256|sharedsecretAAAA...,registry-b.example|HS256|sharedsecretBBBB...
+ *   TRUSTED_ISSUERS=registry-a|HS256|sharedsecretAAAA...
+ *   TRUSTED_ISSUERS=registry-b|EdDSA|https://registry-b.example/.well-known/jwks.json
  *
  * The pipe-delimited format is deliberately ugly so reviewers notice
- * if a token is being trusted from somewhere unexpected. Future work
- * (#2-followup) reads this from a typed config file (TOML/JSON) and
- * supports JWKS-fetching RS256/EdDSA variants — for V1 we only
- * accept HS256 shared secrets because that matches what the registry
- * and control plane already issue. Asymmetric signing requires a
- * larger migration (separate PR).
+ * if a token is being trusted from somewhere unexpected.
  *
  * Audit policy: every accepted trusted-issuer token logs the `iss`
  * + `sub` + `jti` at INFO with `event=acdp.jwt.trusted_issuer_accept`
  * so operators can audit federation traffic.
  */
 
-export type TrustedAlg = 'HS256';
+export type TrustedAlg = 'HS256' | 'EdDSA';
 
 export interface TrustedIssuer {
   /** Value the JWT's `iss` claim must equal. */
   iss: string;
-  /** Algorithm — only `HS256` in V1. */
   alg: TrustedAlg;
-  /** Shared secret for HS256 verification. ≥32 bytes per RFC 7518 §3.2. */
-  secret: string;
+  /** Shared secret for HS256 verification. ≥32 bytes per RFC 7518 §3.2. Unset for EdDSA. */
+  secret?: string;
+  /** JWKS URL for EdDSA verification. Unset for HS256. */
+  jwksUrl?: string;
   /**
    * Optional audience requirement — when set, the JWT's `aud` claim
    * MUST match (string equality). Lets a control plane accept a
@@ -60,29 +58,43 @@ export function parseTrustedIssuers(raw: string): TrustedIssuer[] {
         `TRUSTED_ISSUERS entry '${entry}' has ${parts.length} fields; minimum is iss|alg|secret`,
       );
     }
-    const [iss, alg, secret, audience, requiredScope] = parts;
-    if (!iss || !alg || !secret) {
+    const [iss, alg, material, audience, requiredScope] = parts;
+    if (!iss || !alg || !material) {
       throw new TrustedIssuerError(
         `TRUSTED_ISSUERS entry '${entry}' has an empty required field`,
       );
     }
-    if (alg !== 'HS256') {
+    if (alg === 'HS256') {
+      if (Buffer.byteLength(material, 'utf8') < 32) {
+        throw new TrustedIssuerError(
+          `TRUSTED_ISSUERS entry for iss='${iss}': secret < 32 bytes (HS256 RFC 7518 §3.2)`,
+        );
+      }
+      out.push({
+        iss,
+        alg: 'HS256',
+        secret: material,
+        audience: audience || undefined,
+        requiredScope: requiredScope || undefined,
+      });
+    } else if (alg === 'EdDSA') {
+      if (!/^https?:\/\//.test(material)) {
+        throw new TrustedIssuerError(
+          `TRUSTED_ISSUERS entry for iss='${iss}': EdDSA material must be a JWKS URL (got '${material}')`,
+        );
+      }
+      out.push({
+        iss,
+        alg: 'EdDSA',
+        jwksUrl: material,
+        audience: audience || undefined,
+        requiredScope: requiredScope || undefined,
+      });
+    } else {
       throw new TrustedIssuerError(
-        `TRUSTED_ISSUERS entry '${entry}': only HS256 supported in V1 (got '${alg}')`,
+        `TRUSTED_ISSUERS entry '${entry}': unsupported alg '${alg}' (want HS256 or EdDSA)`,
       );
     }
-    if (Buffer.byteLength(secret, 'utf8') < 32) {
-      throw new TrustedIssuerError(
-        `TRUSTED_ISSUERS entry for iss='${iss}': secret < 32 bytes (HS256 RFC 7518 §3.2)`,
-      );
-    }
-    out.push({
-      iss,
-      alg: 'HS256',
-      secret,
-      audience: audience || undefined,
-      requiredScope: requiredScope || undefined,
-    });
   }
   return out;
 }

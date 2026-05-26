@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { AppConfigService } from '../config/app-config.service';
 import { CrossIssuerValidator } from './cross-issuer-validator.service';
 import { IntrospectController } from './introspect.controller';
+import { SigningMaterialService } from './signing-material.service';
 import { TrustedIssuerRegistry } from './trusted-issuers';
 
 const SECRET = 'a'.repeat(64);
@@ -16,6 +17,9 @@ function fakeConfig(): any {
     jwtAuthority: ISS,
     jwtTtlSeconds: 3600,
     challengeTtlSeconds: 300,
+    jwtSigningAlg: 'HS256',
+    jwtPrivateKeyPem: '',
+    jwtKid: '',
   };
 }
 
@@ -61,6 +65,7 @@ describe('IntrospectController', () => {
       providers: [
         { provide: AppConfigService, useValue: cfg },
         { provide: TrustedIssuerRegistry, useValue: trustedRegistry },
+        SigningMaterialService,
         CrossIssuerValidator,
       ],
     }).compile();
@@ -137,6 +142,7 @@ describe('IntrospectController', () => {
       providers: [
         { provide: AppConfigService, useValue: cfg },
         { provide: TrustedIssuerRegistry, useValue: peerRegistry },
+        SigningMaterialService,
         CrossIssuerValidator,
       ],
     }).compile();

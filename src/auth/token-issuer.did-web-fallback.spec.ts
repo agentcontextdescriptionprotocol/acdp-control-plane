@@ -12,6 +12,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { ChallengeStore } from './challenge-store.service';
 import { DidFetchResponse, DidWebResolverService } from './did-web/did-web-resolver.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
+import { buildSigningMaterial } from './jwt-signing';
 import { PinnedKeysService } from './pinned-keys.service';
 import { SsrfPolicy } from './did-web/ssrf-guard';
 import { TokenIssuer } from './token-issuer.service';
@@ -88,10 +89,12 @@ describe('TokenIssuer × DidWebResolverService (fallback chain)', () => {
     const resolver = opts.withResolver
       ? new DidWebResolverService(new TestSsrfPolicy(), stubFetcher(didDocJson))
       : null;
+    const cfg = fakeConfig();
     return new TokenIssuer(
-      fakeConfig() as any,
+      cfg,
       store,
       pinned,
+      { material: buildSigningMaterial({ algorithm: 'HS256', hsSecret: cfg.jwtSecret }) } as any,
       null, // revocations
       null, // ledger
       resolver,
