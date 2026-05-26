@@ -56,8 +56,8 @@ export class AuthController {
   @ApiBody({ type: ChallengeRequestDto })
   @ApiOkResponse({ type: ChallengeResponseDto, description: 'Fresh challenge record.' })
   @ApiBadRequestResponse({ type: AuthErrorDto, description: 'Malformed agent_id.' })
-  challenge(@Body() body: ChallengeRequestDto): ChallengeResponseDto {
-    const rec = this.issuer.issueChallenge(body.agent_id);
+  async challenge(@Body() body: ChallengeRequestDto): Promise<ChallengeResponseDto> {
+    const rec = await this.issuer.issueChallenge(body.agent_id);
     return {
       nonce: rec.nonce,
       registry_authority: rec.registryAuthority,
@@ -87,8 +87,8 @@ export class AuthController {
     description:
       'Unknown nonce, expired challenge, agent_id mismatch, missing pinned key, or bad signature.',
   })
-  token(@Body() body: TokenRequestDto): TokenResponseDto {
-    const out = this.issuer.issueToken({
+  async token(@Body() body: TokenRequestDto): Promise<TokenResponseDto> {
+    const out = await this.issuer.issueToken({
       agentDid: body.agent_id,
       keyId: body.key_id,
       nonce: body.nonce,

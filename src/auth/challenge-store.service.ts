@@ -1,40 +1,40 @@
 /**
- * In-memory challenge store with TTL eviction.
+ * Challenge orchestration — generates nonces and the canonical signing
+ * input, then delegates persistence to a `ChallengeRepository` (memory
+ * or Postgres, picked at boot by `AuthModule`).
  *
- * Stores `(nonce → { agentDid, signingInput, expiresAt })` for the
- * window between `POST /auth/challenge` and `POST /auth/token`. A
- * second use of the same nonce is rejected (replay defense), and
- * entries older than their TTL are evicted lazily on each access.
- *
- * V1 single-process. A multi-instance deployment should swap this for
- * a Redis/Postgres-backed implementation behind the same interface.
+ * Public API kept stable: `TokenIssuer` calls `issue(...)` and
+ * `consume(...)` exactly as before, but the storage layer is now
+ * pluggable so a multi-instance control plane can share state.
  */
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import {
+  CHALLENGE_REPOSITORY,
+  ChallengeRecord,
+  ChallengeRepository,
+} from './challenge-repository';
 
-export interface ChallengeRecord {
-  nonce: string;
-  agentDid: string;
-  registryAuthority: string;
-  signingInput: string;
-  /** Unix seconds. */
-  expiresAt: number;
-}
+// Re-export for backwards compatibility with existing imports.
+export type { ChallengeRecord } from './challenge-repository';
 
 @Injectable()
 export class ChallengeStore {
   private readonly logger = new Logger(ChallengeStore.name);
-  private readonly store = new Map<string, ChallengeRecord>();
 
-  /** Mint a fresh challenge for an agent. */
-  issue(
+  constructor(
+    @Inject(CHALLENGE_REPOSITORY)
+    private readonly repo: ChallengeRepository,
+  ) {}
+
+  /** Mint a fresh challenge for an agent and persist it. */
+  async issue(
     agentDid: string,
     registryAuthority: string,
     ttlSeconds: number,
-  ): ChallengeRecord {
-    this.evictExpired();
+  ): Promise<ChallengeRecord> {
     const nonce = randomBytes(16).toString('base64url');
-    const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const expiresAt = nowSeconds() + ttlSeconds;
     const signingInput = signingInputFor(
       nonce,
       agentDid,
@@ -48,7 +48,7 @@ export class ChallengeStore {
       signingInput,
       expiresAt,
     };
-    this.store.set(nonce, record);
+    await this.repo.put(record);
     return record;
   }
 
@@ -56,28 +56,22 @@ export class ChallengeStore {
    * Consume a challenge — returns the record and removes it.
    *
    * Returns `null` when the nonce is unknown, expired, or already
-   * consumed. The single-use property is what defends against replay.
+   * consumed. The atomicity of the underlying `take()` is what defends
+   * against replay across concurrent /auth/token calls in a
+   * multi-instance deployment.
    */
-  consume(nonce: string): ChallengeRecord | null {
-    const rec = this.store.get(nonce);
-    if (!rec) return null;
-    this.store.delete(nonce);
-    if (rec.expiresAt < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-    return rec;
+  async consume(nonce: string): Promise<ChallengeRecord | null> {
+    return this.repo.take(nonce);
   }
 
-  size(): number {
-    this.evictExpired();
-    return this.store.size;
+  /** Visible for diagnostics / tests. */
+  async size(): Promise<number> {
+    return this.repo.size();
   }
 
-  private evictExpired(): void {
-    const now = Math.floor(Date.now() / 1000);
-    for (const [nonce, rec] of this.store) {
-      if (rec.expiresAt < now) this.store.delete(nonce);
-    }
+  /** Visible for the sweeper service. */
+  async evictExpired(): Promise<number> {
+    return this.repo.evictExpired();
   }
 }
 
@@ -95,4 +89,8 @@ export function signingInputFor(
   expiresAt: number,
 ): string {
   return `acdp-registry-auth:v1:${nonce}:${agentDid}:${authority}:${expiresAt}`;
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
 }
