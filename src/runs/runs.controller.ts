@@ -20,6 +20,7 @@ import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { RunCompleteDto } from '../dto/run-complete.dto';
 import { StreamHubService } from '../events/stream-hub.service';
+import { CheckPolicy } from '../policy/check-policy.decorator';
 import { ContextEventRepository } from '../storage/context-event.repository';
 import { LineageEdgeRepository } from '../storage/lineage-edge.repository';
 import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
@@ -46,6 +47,7 @@ export class RunsController {
   ) {}
 
   @Get()
+  @CheckPolicy('run.read')
   @ApiOperation({ summary: 'List runs with optional filtering and pagination.' })
   async listRuns(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
@@ -62,12 +64,14 @@ export class RunsController {
   }
 
   @Get(':runId')
+  @CheckPolicy('run.read')
   @ApiOperation({ summary: 'Fetch a single run.' })
   async getRun(@Param('runId') runId: string, @Req() req: TenantedRequest) {
     return this.runsService.getOrThrow(runId, tenantOf(req));
   }
 
   @Get(':runId/lineage')
+  @CheckPolicy('run.read')
   @ApiOperation({
     summary: 'DAG of contexts produced in this run (nodes + directed edges).',
   })
@@ -98,6 +102,7 @@ export class RunsController {
   }
 
   @Get(':runId/events')
+  @CheckPolicy('run.read')
   @ApiOperation({ summary: 'List context events for a run.' })
   async getRunEvents(
     @Param('runId') runId: string,
@@ -143,6 +148,7 @@ export class RunsController {
 
   @Post(':runId/complete')
   @HttpCode(204)
+  @CheckPolicy('run.start')
   @ApiOperation({ summary: 'Playground notifies that the run is complete.' })
   async markComplete(
     @Param('runId') runId: string,
