@@ -17,9 +17,9 @@ import {
   BadRequestException,
   Injectable,
   Logger,
-  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
+import { verifyEcdsaP256 } from '../auth/ecdsa-p256';
 import { verifyEd25519 } from '../auth/ed25519';
 import { PinnedKeysService } from '../auth/pinned-keys.service';
 import { capabilityAssertion, parseCapabilityUri } from './capability-uri';
@@ -28,28 +28,19 @@ import { CapabilityRepository, CapabilityRow } from './capability.repository';
 const MAX_CLOCK_SKEW_SECONDS = 300;
 
 @Injectable()
-export class CapabilityService implements OnModuleInit {
+export class CapabilityService {
   private readonly logger = new Logger(CapabilityService.name);
+
+  constructor(
+    private readonly repo: CapabilityRepository,
+    private readonly pinned: PinnedKeysService,
+  ) {}
+
   /**
-   * Own private PinnedKeysService instance. Decoupled from
-   * `AuthModule.forRoot`'s conditional registration so capability
-   * declaration works regardless of whether `TOKEN_ISSUANCE_ENABLED`
-   * is on. Reads from the same `CONTROL_PLANE_PINNED_KEYS` env var,
-   * so operators only maintain one list.
+   * Visible for tests — load pinned keys from an explicit string.
+   * Delegates to the shared `PinnedKeysService` (loaded globally
+   * by `AppModule`); tests use this to bypass env-driven init.
    */
-  private readonly pinned = new PinnedKeysService();
-
-  constructor(private readonly repo: CapabilityRepository) {}
-
-  onModuleInit(): void {
-    // OnModuleInit on the private PinnedKeysService isn't auto-invoked
-    // (Nest only calls lifecycle hooks on DI-registered instances),
-    // so we trigger it explicitly. Tests can swap by calling
-    // `setPinnedKeys()` instead of relying on this hook.
-    this.pinned.onModuleInit();
-  }
-
-  /** Visible for tests — load pinned keys from an explicit string. */
   setPinnedKeys(raw: string): void {
     this.pinned.load(raw);
   }
@@ -73,9 +64,9 @@ export class CapabilityService implements OnModuleInit {
     // Schema validation (URN form + segment char set).
     parseCapabilityUri(req.capabilityUri);
 
-    if (req.algorithm !== 'ed25519') {
+    if (req.algorithm !== 'ed25519' && req.algorithm !== 'ecdsa-p256') {
       throw new BadRequestException(
-        `unsupported signature algorithm: '${req.algorithm}' (only ed25519 in V1)`,
+        `unsupported signature algorithm: '${req.algorithm}' (supported: ed25519, ecdsa-p256)`,
       );
     }
 
@@ -101,12 +92,23 @@ export class CapabilityService implements OnModuleInit {
       );
     }
 
+    // Algorithm-downgrade defense: request algorithm must match pinned.
+    if (req.algorithm !== pinned.algorithm) {
+      throw new UnauthorizedException(
+        `signature.algorithm '${req.algorithm}' does not match pinned algorithm ` +
+          `'${pinned.algorithm}' for ${req.agentDid}`,
+      );
+    }
+
     const signingInput = capabilityAssertion(
       req.agentDid,
       req.capabilityUri,
       req.declaredAtIso,
     );
-    const ok = verifyEd25519(pinned.publicKey, signingInput, req.signature);
+    const ok =
+      pinned.algorithm === 'ed25519'
+        ? verifyEd25519(pinned.publicKey, signingInput, req.signature)
+        : verifyEcdsaP256(pinned.publicKey, signingInput, req.signature);
     if (!ok) {
       throw new UnauthorizedException('capability declaration signature verification failed');
     }

@@ -8,6 +8,7 @@ import { CapabilityRepository } from './agents/capability.repository';
 import { CapabilityService } from './agents/capability.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
+import { PinnedKeysService } from './auth/pinned-keys.service';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
 import { AppConfigService } from './config/app-config.service';
 import { ConfigModule } from './config/config.module';
@@ -82,6 +83,13 @@ import { WebhookService } from './webhooks/webhook.service';
       inject: [AppConfigService],
     },
     StreamHubService,
+
+    // Pinned-key directory is @Global() so both AuthModule (TokenIssuer)
+    // and AgentsModule (CapabilityService) can inject the same instance.
+    // Registering it here unconditionally means capability declarations
+    // work even when TOKEN_ISSUANCE_ENABLED is off (the agent still
+    // needs to prove they own the DID before declaring caps for it).
+    PinnedKeysService,
 
     // Repositories
     ContextEventRepository,
