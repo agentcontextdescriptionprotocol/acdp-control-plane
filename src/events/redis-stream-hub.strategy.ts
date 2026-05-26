@@ -37,7 +37,7 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
 
   private async connect(redisUrl: string): Promise<void> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
       const Redis = require('ioredis');
       this.publisher = new Redis(redisUrl);
       this.subscriber = new Redis(redisUrl);

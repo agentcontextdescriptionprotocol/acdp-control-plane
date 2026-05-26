@@ -17,6 +17,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Lint (ESLint)
+        run: npm run lint -- --max-warnings 30
       - name: TypeScript compile
         run: npx tsc --noEmit -p tsconfig.json
       - name: Unit tests

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import { UnauthorizedException } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
 import { CrossIssuerValidator } from './cross-issuer-validator.service';

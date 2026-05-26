@@ -31,7 +31,7 @@ export class AppConfigService implements OnModuleInit {
 
   readonly clientVersion: string = (() => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
       return require('../../package.json').version as string;
     } catch {
       return '0.0.0';
