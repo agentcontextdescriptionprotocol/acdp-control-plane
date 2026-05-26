@@ -47,6 +47,25 @@ export interface RevocationRepository {
 
   /** Live entry count (for diagnostics). */
   size(): Promise<number>;
+
+  /**
+   * Cross-issuer revocation feed (Phase-5 plan §9 follow-up).
+   *
+   * Returns revocations whose `revokedAt > sinceMs`, ordered by
+   * `revokedAt ASC, jti ASC` for deterministic pagination. `limit` is
+   * clamped to a sane upper bound by the implementation. Returns the
+   * next cursor (`revokedAt|jti` of the last entry) when the result
+   * set is at least `limit` rows — `null` otherwise.
+   *
+   * Peers consume this via `GET /auth/revocations?since=...&limit=...`
+   * and apply the entries into their local revocation store, so a
+   * token revoked at the issuer is rejected at every consuming
+   * registry without requiring shared state.
+   */
+  listSince(
+    sinceMs: number,
+    limit: number,
+  ): Promise<{ entries: RevocationRecord[]; nextCursor: number | null }>;
 }
 
 export const REVOCATION_REPOSITORY = Symbol('REVOCATION_REPOSITORY');
