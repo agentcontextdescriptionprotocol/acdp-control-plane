@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, UnauthorizedException } from '
 import { AppConfigService } from '../config/app-config.service';
 import { AcdpWebhookEvent } from '../contracts/acdp';
 import { EventProcessorService } from '../processor/event-processor.service';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { verifyWebhookSignature } from './hmac';
 
 @Injectable()
@@ -13,7 +14,12 @@ export class IngestService {
     private readonly processor: EventProcessorService,
   ) {}
 
-  async handle(body: Buffer, signatureHeader: string, headerRunId?: string): Promise<void> {
+  async handle(
+    body: Buffer,
+    signatureHeader: string,
+    headerRunId?: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<void> {
     if (!verifyWebhookSignature(body, signatureHeader ?? '', this.config.webhookSecret)) {
       throw new UnauthorizedException('Invalid webhook signature');
     }
@@ -48,7 +54,7 @@ export class IngestService {
     }
 
     const runId = headerRunId ?? payload.run_id;
-    await this.processor.process(payload, runId);
+    await this.processor.process(payload, runId, tenantId);
   }
 }
 

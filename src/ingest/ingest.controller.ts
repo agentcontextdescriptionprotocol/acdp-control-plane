@@ -10,6 +10,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Public } from '../auth/public.decorator';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { IngestService } from './ingest.service';
 
 @ApiTags('ingest')
@@ -24,12 +25,19 @@ export class IngestController {
     summary: 'Receive an ACDP webhook event from a registry. Authenticated by HMAC-SHA256.',
   })
   async receiveWebhook(
-    @Req() req: RawBodyRequest<Request>,
+    @Req() req: RawBodyRequest<Request> & { tenantId?: string },
     @Headers('x-acdp-signature') signature: string,
     @Headers('x-run-id') runId?: string,
+    @Headers('x-tenant-id') tenantIdHeader?: string,
   ): Promise<void> {
     const body = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
-    await this.ingestService.handle(body, signature, runId);
+    // Tenant resolution priority: AuthGuard-pinned (when the endpoint
+    // isn't @Public) → X-Tenant-Id header (upstream registry tags) →
+    // DEFAULT_TENANT_ID. This endpoint IS @Public so AuthGuard
+    // doesn't set tenantId; the header is the production path.
+    const tenantId =
+      req.tenantId || tenantIdHeader?.trim() || DEFAULT_TENANT_ID;
+    await this.ingestService.handle(body, signature, runId, tenantId);
   }
 
   @Get('health')

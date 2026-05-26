@@ -38,6 +38,7 @@ describe('IngestService', () => {
     expect(processor.process).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'context_published' }),
       'run-123',
+      'default',
     );
   });
 
@@ -45,14 +46,22 @@ describe('IngestService', () => {
     const withEmbedded = { ...validPayload, run_id: 'payload-run' };
     const body = Buffer.from(JSON.stringify(withEmbedded));
     await service.handle(body, sign(body), 'header-run');
-    expect(processor.process).toHaveBeenCalledWith(expect.any(Object), 'header-run');
+    expect(processor.process).toHaveBeenCalledWith(
+      expect.any(Object),
+      'header-run',
+      'default',
+    );
   });
 
   it('falls back to payload.run_id when no header is provided', async () => {
     const withEmbedded = { ...validPayload, run_id: 'payload-run' };
     const body = Buffer.from(JSON.stringify(withEmbedded));
     await service.handle(body, sign(body), undefined);
-    expect(processor.process).toHaveBeenCalledWith(expect.any(Object), 'payload-run');
+    expect(processor.process).toHaveBeenCalledWith(
+      expect.any(Object),
+      'payload-run',
+      'default',
+    );
   });
 
   it('throws Unauthorized on bad signature', async () => {
