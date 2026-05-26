@@ -95,6 +95,11 @@ export class AppConfigService implements OnModuleInit {
   readonly otelServiceName = process.env.OTEL_SERVICE_NAME ?? 'acdp-control-plane';
   readonly otelExporterOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '';
 
+  // OpenAPI / Swagger
+  // Defaults to enabled in development; opt-in in production via SWAGGER_ENABLED=true.
+  readonly swaggerEnabled = readBoolean('SWAGGER_ENABLED', this.nodeEnv === 'development');
+  readonly swaggerPath = process.env.SWAGGER_PATH ?? 'docs';
+
   onModuleInit(): void {
     this.validate();
   }
