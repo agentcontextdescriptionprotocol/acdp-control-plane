@@ -3,6 +3,9 @@ import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 
 import { AgentsController } from './agents/agents.controller';
+import { CapabilityController } from './agents/capability.controller';
+import { CapabilityRepository } from './agents/capability.repository';
+import { CapabilityService } from './agents/capability.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
@@ -57,6 +60,7 @@ import { WebhookService } from './webhooks/webhook.service';
     EventsController,
     ContextsController,
     AgentsController,
+    CapabilityController,
     RegistriesController,
     DashboardController,
     WebhookController,
@@ -84,6 +88,8 @@ import { WebhookService } from './webhooks/webhook.service';
     RunRepository,
     LineageEdgeRepository,
     AgentRepository,
+    CapabilityRepository,
+    CapabilityService,
     RegistryRepository,
     WebhookRepository,
     WebhookDeliveryRepository,
