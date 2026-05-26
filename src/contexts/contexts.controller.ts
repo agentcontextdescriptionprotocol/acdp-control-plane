@@ -1,6 +1,7 @@
 import { Controller, Get, Logger, NotFoundException, Param, Res } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
+import { CheckPolicy } from '../policy/check-policy.decorator';
 import { RegistryRepository } from '../storage/registry.repository';
 
 @ApiTags('contexts')
@@ -15,6 +16,7 @@ export class ContextsController {
   // `:ctxId(.*)` regex syntax is gone). The `ctxId` param arrives as a
   // string[] of decoded path segments.
   @Get('*ctxId')
+  @CheckPolicy('context.retrieve')
   @ApiOperation({
     summary:
       'Federated context retrieval — proxied to the registry that authored it. ctx_id format: acdp://<authority>/<uuid>',

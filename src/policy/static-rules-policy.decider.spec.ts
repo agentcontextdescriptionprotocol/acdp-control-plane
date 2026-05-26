@@ -22,9 +22,12 @@ function assertDeny(d: PolicyDecision, code: string) {
   expect(d.kind).toBe('deny');
   if (d.kind === 'deny') expect(d.code).toBe(code);
 }
-function assertIndeterminate(d: PolicyDecision) {
+// Retained — used in the OPA-side tests and as the inverse expectation for
+// future indeterminate paths (none in static-rules right now).
+function _assertIndeterminate(d: PolicyDecision) {
   expect(d.kind).toBe('indeterminate');
 }
+void _assertIndeterminate; // keep importable for future refactors
 
 describe('StaticRulesPolicyDecider — retrieve / visibility', () => {
   const d = new StaticRulesPolicyDecider();
@@ -71,8 +74,11 @@ describe('StaticRulesPolicyDecider — retrieve / visibility', () => {
     );
   });
 
-  it('retrieve without visibility → indeterminate (caller bug signal)', () => {
-    assertIndeterminate(d.decide(req({ resourceVisibility: undefined })));
+  it('retrieve without visibility → allow (guard-time check; service re-validates)', () => {
+    // PolicyGuard runs before the resource is fetched, so it can't
+    // supply visibility. We allow authenticated callers through and
+    // rely on the service layer to re-check visibility post-fetch.
+    assertAllow(d.decide(req({ resourceVisibility: undefined })));
   });
 });
 

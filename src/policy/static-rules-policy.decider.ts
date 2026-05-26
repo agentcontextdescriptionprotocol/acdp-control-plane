@@ -99,10 +99,15 @@ export class StaticRulesPolicyDecider implements PolicyDecider {
           return PolicyDecisions.allow();
         }
         case undefined:
-          // No visibility supplied — fall through to indeterminate
-          // rather than allow (visibility is the headline rule for
-          // retrieve; missing it indicates a caller bug, not a permit).
-          return PolicyDecisions.indeterminate('retrieve without resourceVisibility');
+          // No visibility supplied at guard time — the guard can't
+          // know visibility until the resource is fetched. For an
+          // authenticated caller, allow it through; the service layer
+          // re-checks visibility/audience post-fetch. Surfacing
+          // `indeterminate` here would dead-end every @CheckPolicy-
+          // gated retrieve, since no caller can supply visibility
+          // before the resource is loaded. Tenant + scope checks
+          // above still applied.
+          return PolicyDecisions.allow();
       }
     }
 
