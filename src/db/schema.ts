@@ -192,6 +192,25 @@ export const revokedTokens = pgTable(
   }),
 );
 
+// Self-declared agent capabilities (#4). Signature gates the write so
+// a third party can't claim capabilities for an agent they don't control.
+export const agentCapabilities = pgTable(
+  'agent_capabilities',
+  {
+    agentDid: text('agent_did').notNull(),
+    capabilityUri: text('capability_uri').notNull(),
+    declaredAt: timestamp('declared_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    signedBy: text('signed_by').notNull(),
+    signature: text('signature').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentDid, t.capabilityUri] }),
+    capabilityIdx: index('agent_capabilities_capability_idx').on(t.capabilityUri),
+  }),
+);
+
 export type ContextEvent = typeof contextEvents.$inferSelect;
 export type NewContextEvent = typeof contextEvents.$inferInsert;
 export type Run = typeof runs.$inferSelect;
@@ -206,3 +225,5 @@ export type AuthChallenge = typeof authChallenges.$inferSelect;
 export type NewAuthChallenge = typeof authChallenges.$inferInsert;
 export type RevokedToken = typeof revokedTokens.$inferSelect;
 export type NewRevokedToken = typeof revokedTokens.$inferInsert;
+export type AgentCapability = typeof agentCapabilities.$inferSelect;
+export type NewAgentCapability = typeof agentCapabilities.$inferInsert;
