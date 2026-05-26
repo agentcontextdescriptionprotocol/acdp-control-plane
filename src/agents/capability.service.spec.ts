@@ -54,9 +54,11 @@ describe('CapabilityService', () => {
   let svc: CapabilityService;
   let priv: ReturnType<typeof generateAgent>['privateKey'];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repo = new InMemoryRepo();
-    svc = new CapabilityService(repo as any);
+    const { PinnedKeysService } = await import('../auth/pinned-keys.service');
+    const pinned = new PinnedKeysService();
+    svc = new CapabilityService(repo as any, pinned);
     const { privateKey, rawPubB64 } = generateAgent();
     priv = privateKey;
     svc.setPinnedKeys(`${DID}=${rawPubB64}`);
@@ -99,7 +101,7 @@ describe('CapabilityService', () => {
     await expect(
       svc.declare({
         agentDid: DID, capabilityUri: URI, declaredAtIso: declaredAt,
-        keyId: 'k', algorithm: 'ecdsa-p256', signature: 'AAA=',
+        keyId: 'k', algorithm: 'rsa-sha256', signature: 'AAA=',
       }),
     ).rejects.toThrow(BadRequestException);
   });

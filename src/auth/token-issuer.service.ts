@@ -33,13 +33,16 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
+import { verifyEcdsaP256 } from './ecdsa-p256';
+import { verifyEd25519 } from './ed25519';
 import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
 import {
   REVOCATION_REPOSITORY,
   RevocationRepository,
 } from './revocation-repository';
-import { verifyEd25519 } from './ed25519';
+
+const SUPPORTED_SIGNATURE_ALGORITHMS = new Set(['ed25519', 'ecdsa-p256']);
 
 export interface IssuedToken {
   token: string;
@@ -102,7 +105,7 @@ export class TokenIssuer {
     },
     ctx: IssueTokenContext = {},
   ): Promise<IssuedToken> {
-    if (req.algorithm !== 'ed25519') {
+    if (!SUPPORTED_SIGNATURE_ALGORITHMS.has(req.algorithm)) {
       this.ledger?.record({
         sub: req.agentDid,
         iss: this.config.jwtAuthority,
@@ -111,7 +114,8 @@ export class TokenIssuer {
         decisionDetail: `algorithm=${req.algorithm}`,
       });
       throw new BadRequestException(
-        `Unsupported signature algorithm: '${req.algorithm}'`,
+        `Unsupported signature algorithm: '${req.algorithm}' ` +
+          `(supported: ${Array.from(SUPPORTED_SIGNATURE_ALGORITHMS).join(', ')})`,
       );
     }
 
@@ -177,8 +181,30 @@ export class TokenIssuer {
       );
     }
 
+    // Algorithm-downgrade defense: the request's signature.algorithm
+    // MUST match the pinned key's algorithm. Without this, a stolen
+    // Ed25519 key could be claimed against an ECDSA-pinned agent and
+    // routed to the wrong verifier (or vice versa). Mirrors the
+    // registry's check in `acdp-registry-core::playground.rs`.
+    if (req.algorithm !== pinned.algorithm) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_alg',
+        decisionDetail: `request=${req.algorithm} pinned=${pinned.algorithm}`,
+      });
+      throw new UnauthorizedException(
+        `signature.algorithm '${req.algorithm}' does not match pinned algorithm ` +
+          `'${pinned.algorithm}' for ${req.agentDid}`,
+      );
+    }
+
     // Verify the signature over the canonical signing input.
-    const ok = verifyEd25519(pinned.publicKey, record.signingInput, req.signature);
+    const ok =
+      pinned.algorithm === 'ed25519'
+        ? verifyEd25519(pinned.publicKey, record.signingInput, req.signature)
+        : verifyEcdsaP256(pinned.publicKey, record.signingInput, req.signature);
     if (!ok) {
       this.ledger?.record({
         sub: req.agentDid,

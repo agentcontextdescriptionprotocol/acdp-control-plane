@@ -15,7 +15,8 @@ import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IntrospectController } from './introspect.controller';
 import { IssuanceLedgerService } from './issuance-ledger.service';
-import { PinnedKeysService } from './pinned-keys.service';
+// PinnedKeysService is registered globally by AppModule (it's @Global()).
+// Don't add it to AuthModule's providers — would shadow the global one.
 import { PostgresChallengeRepository } from './postgres-challenge.repository';
 import { PostgresRevocationRepository } from './postgres-revocation.repository';
 import {
@@ -109,7 +110,7 @@ export class AuthModule {
         revocationRepoProvider,
         trustedRegistryProvider,
         ChallengeStore,
-        PinnedKeysService,
+        // PinnedKeysService: provided globally by AppModule (@Global()).
         TokenIssuer,
         IssuanceLedgerService,
         AuthSweeperService,
