@@ -63,6 +63,7 @@ export class AuthGuard implements CanActivate {
 
     request.actorId = token.slice(0, 8) + '...';
     request.actorType = 'api-key';
+    request.actorIsAdmin = this.config.authAdminApiKeys.includes(token);
     request.tenantId = this.tenantFor(token);
 
     return true;
