@@ -12,6 +12,7 @@ import { ConfigModule } from '../config/config.module';
 import { DatabaseService } from '../db/database.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
+import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
 import { PostgresChallengeRepository } from './postgres-challenge.repository';
 import { PostgresRevocationRepository } from './postgres-revocation.repository';
@@ -27,10 +28,12 @@ import { TokenIssuer } from './token-issuer.service';
  *
  * When `TOKEN_ISSUANCE_ENABLED=true` the IdP pieces are registered:
  *   - `ChallengeStore` (delegates to repo)
- *   - `TokenIssuer` (challenge → JWT, plus revocation check on verify)
+ *   - `TokenIssuer` (challenge → JWT, plus revocation check on verify,
+ *     plus #12 issuance-ledger audit hooks)
  *   - `PinnedKeysService` (static directory; V2 plugs in did:web)
  *   - `RevokeController` (RFC 7009-style revocation endpoint)
  *   - `AuthSweeperService` (background eviction of expired rows)
+ *   - `IssuanceLedgerService` (#12 append-only audit chain)
  *
  * Persistence backend (`memory` vs `postgres`) is chosen by
  * `AUTH_PERSISTENCE`. Multi-instance deployments MUST use `postgres`.
@@ -90,9 +93,16 @@ export class AuthModule {
         ChallengeStore,
         PinnedKeysService,
         TokenIssuer,
+        IssuanceLedgerService,
         AuthSweeperService,
       ],
-      exports: [AuthGuard, TokenIssuer, CHALLENGE_REPOSITORY, REVOCATION_REPOSITORY],
+      exports: [
+        AuthGuard,
+        TokenIssuer,
+        IssuanceLedgerService,
+        CHALLENGE_REPOSITORY,
+        REVOCATION_REPOSITORY,
+      ],
     };
   }
 }

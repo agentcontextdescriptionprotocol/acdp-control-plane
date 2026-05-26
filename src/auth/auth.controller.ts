@@ -15,6 +15,7 @@ import {
   HttpStatus,
   Logger,
   Post,
+  Req,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -24,6 +25,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
 
 import {
   AuthErrorDto,
@@ -87,19 +89,37 @@ export class AuthController {
     description:
       'Unknown nonce, expired challenge, agent_id mismatch, missing pinned key, or bad signature.',
   })
-  async token(@Body() body: TokenRequestDto): Promise<TokenResponseDto> {
-    const out = await this.issuer.issueToken({
-      agentDid: body.agent_id,
-      keyId: body.key_id,
-      nonce: body.nonce,
-      expiresAt: body.expires_at,
-      algorithm: body.algorithm,
-      signature: body.signature,
-    });
+  async token(
+    @Body() body: TokenRequestDto,
+    @Req() req: Request,
+  ): Promise<TokenResponseDto> {
+    const out = await this.issuer.issueToken(
+      {
+        agentDid: body.agent_id,
+        keyId: body.key_id,
+        nonce: body.nonce,
+        expiresAt: body.expires_at,
+        algorithm: body.algorithm,
+        signature: body.signature,
+      },
+      { signerIp: extractIp(req) },
+    );
     return {
       token: out.token,
       token_type: out.tokenType,
       expires_at: out.expiresAt,
     };
   }
+}
+
+/**
+ * Best-effort caller IP for audit. Prefers `X-Forwarded-For` (first
+ * hop) when present — Express's `req.ip` only reflects the proxy
+ * unless `app.set('trust proxy', ...)` is configured upstream.
+ */
+function extractIp(req: Request): string | undefined {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string') return xff.split(',')[0]!.trim();
+  if (Array.isArray(xff) && xff[0]) return xff[0];
+  return req.ip;
 }

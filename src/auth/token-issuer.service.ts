@@ -12,6 +12,11 @@
  *                         repository so admin-revoked tokens are
  *                         rejected even before they naturally expire.
  *
+ * Every decision point in `issueToken` writes one row to the
+ * `IssuanceLedgerService` so compliance auditors have a complete
+ * record of who requested what, when, from where, and why we
+ * accepted or rejected.
+ *
  * Splitting the orchestration out of the controller keeps validation
  * decisions testable without spinning up the HTTP layer.
  */
@@ -28,6 +33,7 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
+import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
 import {
   REVOCATION_REPOSITORY,
@@ -50,6 +56,15 @@ export interface AcdpBearerClaims {
   acdp: { registry: string; key_id: string };
 }
 
+/**
+ * Caller context for issueToken — currently just the actor IP for
+ * audit. Other fields (user-agent, request id) can be added without
+ * breaking callers because the type is structural.
+ */
+export interface IssueTokenContext {
+  signerIp?: string;
+}
+
 @Injectable()
 export class TokenIssuer {
   private readonly logger = new Logger(TokenIssuer.name);
@@ -61,6 +76,7 @@ export class TokenIssuer {
     @Optional()
     @Inject(REVOCATION_REPOSITORY)
     private readonly revocations: RevocationRepository | null = null,
+    @Optional() private readonly ledger: IssuanceLedgerService | null = null,
   ) {}
 
   // ── Step 1 — challenge ────────────────────────────────────────────────
@@ -75,15 +91,25 @@ export class TokenIssuer {
 
   // ── Step 2 — token ────────────────────────────────────────────────────
 
-  async issueToken(req: {
-    agentDid: string;
-    keyId: string;
-    nonce: string;
-    expiresAt: number;
-    algorithm: string;
-    signature: string;
-  }): Promise<IssuedToken> {
+  async issueToken(
+    req: {
+      agentDid: string;
+      keyId: string;
+      nonce: string;
+      expiresAt: number;
+      algorithm: string;
+      signature: string;
+    },
+    ctx: IssueTokenContext = {},
+  ): Promise<IssuedToken> {
     if (req.algorithm !== 'ed25519') {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_alg',
+        decisionDetail: `algorithm=${req.algorithm}`,
+      });
       throw new BadRequestException(
         `Unsupported signature algorithm: '${req.algorithm}'`,
       );
@@ -94,6 +120,13 @@ export class TokenIssuer {
     // Postgres, so two concurrent /auth/token calls can't both win).
     const record = await this.challenges.consume(req.nonce);
     if (!record) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_nonce',
+        decisionDetail: 'unknown, expired, or already-used',
+      });
       throw new UnauthorizedException(
         'Unknown, expired, or already-used nonce',
       );
@@ -103,12 +136,26 @@ export class TokenIssuer {
     // the challenge. If a caller could swap agent_id between
     // challenge and token, they could impersonate any pinned identity.
     if (record.agentDid !== req.agentDid) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_agent_mismatch',
+        decisionDetail: `challenge=${record.agentDid} got=${req.agentDid}`,
+      });
       throw new UnauthorizedException(
         `agent_id does not match challenge owner: ` +
           `challenge=${record.agentDid} got=${req.agentDid}`,
       );
     }
     if (record.expiresAt !== req.expiresAt) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_expires_mismatch',
+        decisionDetail: `challenge=${record.expiresAt} got=${req.expiresAt}`,
+      });
       throw new UnauthorizedException(
         `expires_at does not match challenge: ` +
           `challenge=${record.expiresAt} got=${req.expiresAt}`,
@@ -119,6 +166,12 @@ export class TokenIssuer {
     // V2 will plug in did:web / DID-resolver here.
     const pinned = this.pinned.get(req.agentDid);
     if (!pinned) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_unpinned',
+      });
       throw new UnauthorizedException(
         `agent_did '${req.agentDid}' has no pinned public key on this control plane`,
       );
@@ -127,11 +180,29 @@ export class TokenIssuer {
     // Verify the signature over the canonical signing input.
     const ok = verifyEd25519(pinned.publicKey, record.signingInput, req.signature);
     if (!ok) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_signature',
+      });
       throw new UnauthorizedException('Signature verification failed');
     }
 
     // Mint the JWT.
-    return this.mintJwt(req.agentDid, req.keyId);
+    const issued = this.mintJwt(req.agentDid, req.keyId);
+    const decoded = jwt.decode(issued.token) as AcdpBearerClaims;
+    this.ledger?.record({
+      jti: decoded.jti,
+      sub: decoded.sub,
+      iss: decoded.iss,
+      iat: decoded.iat,
+      exp: decoded.exp,
+      signerIp: ctx.signerIp,
+      decision: 'mint',
+      decisionDetail: `key_id=${req.keyId}`,
+    });
+    return issued;
   }
 
   // ── verify (for downstream guards / federation experiments) ──────────

@@ -64,10 +64,11 @@ export class AppConfigService implements OnModuleInit {
   readonly jwtTtlSeconds = readNumber('JWT_TTL_SECONDS', 3600);
   readonly challengeTtlSeconds = readNumber('CHALLENGE_TTL_SECONDS', 300);
 
-  // Auth-store backend selection. `memory` is correct for single-process
-  // dev/test; multi-instance deployments MUST set `postgres` so the
-  // challenge nonces and revocation list are shared across replicas.
-  // Validated against the allowed set in `validate()`.
+  // Auth-store backend selection — drives the #8 persistent stores,
+  // the #12 issuance ledger, and any future auth tables. `memory` is
+  // correct for single-process dev/test; multi-instance deployments
+  // MUST set `postgres` so the challenge nonces and revocation list
+  // are shared across replicas. Validated against the allowed set.
   readonly authPersistence: 'memory' | 'postgres' = (() => {
     const raw = (process.env.AUTH_PERSISTENCE ?? 'memory').toLowerCase();
     if (raw === 'memory' || raw === 'postgres') return raw;
