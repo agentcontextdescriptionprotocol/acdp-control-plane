@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import { IssuanceLedgerService } from './issuance-ledger.service';
 
 function newLedger(): IssuanceLedgerService {

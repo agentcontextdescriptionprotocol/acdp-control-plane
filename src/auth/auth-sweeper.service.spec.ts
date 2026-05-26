@@ -1,7 +1,7 @@
 import { AuthSweeperService } from './auth-sweeper.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 
 describe('AuthSweeperService', () => {
   let challenges: InMemoryChallengeRepository;
