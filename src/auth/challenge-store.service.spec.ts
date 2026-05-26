@@ -1,14 +1,15 @@
 import { ChallengeStore, signingInputFor } from './challenge-store.service';
+import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 
-describe('ChallengeStore', () => {
+describe('ChallengeStore (in-memory repo)', () => {
   let store: ChallengeStore;
 
   beforeEach(() => {
-    store = new ChallengeStore();
+    store = new ChallengeStore(new InMemoryChallengeRepository());
   });
 
-  it('issues a challenge with the canonical signing input', () => {
-    const rec = store.issue('did:web:alice', 'cp.local', 60);
+  it('issues a challenge with the canonical signing input', async () => {
+    const rec = await store.issue('did:web:alice', 'cp.local', 60);
     expect(rec.nonce).toBeTruthy();
     expect(rec.agentDid).toBe('did:web:alice');
     expect(rec.registryAuthority).toBe('cp.local');
@@ -18,28 +19,28 @@ describe('ChallengeStore', () => {
     );
   });
 
-  it('consume returns the record and deletes it (single-use)', () => {
-    const rec = store.issue('did:web:alice', 'cp.local', 60);
-    const got = store.consume(rec.nonce);
+  it('consume returns the record and deletes it (single-use)', async () => {
+    const rec = await store.issue('did:web:alice', 'cp.local', 60);
+    const got = await store.consume(rec.nonce);
     expect(got?.agentDid).toBe('did:web:alice');
 
-    const second = store.consume(rec.nonce);
+    const second = await store.consume(rec.nonce);
     expect(second).toBeNull();
   });
 
-  it('consume returns null for unknown nonces', () => {
-    expect(store.consume('not-a-real-nonce')).toBeNull();
+  it('consume returns null for unknown nonces', async () => {
+    expect(await store.consume('not-a-real-nonce')).toBeNull();
   });
 
-  it('consume returns null for expired records', () => {
-    const rec = store.issue('did:web:alice', 'cp.local', -1); // already expired
-    expect(store.consume(rec.nonce)).toBeNull();
+  it('consume returns null for expired records', async () => {
+    const rec = await store.issue('did:web:alice', 'cp.local', -1); // already expired
+    expect(await store.consume(rec.nonce)).toBeNull();
   });
 
-  it('size evicts expired records lazily', () => {
-    store.issue('did:web:alice', 'cp.local', -10);
-    store.issue('did:web:bob', 'cp.local', 60);
-    expect(store.size()).toBe(1);
+  it('size evicts expired records lazily', async () => {
+    await store.issue('did:web:alice', 'cp.local', -10);
+    await store.issue('did:web:bob', 'cp.local', 60);
+    expect(await store.size()).toBe(1);
   });
 
   it('signingInputFor format pins the v1 prefix and order', () => {

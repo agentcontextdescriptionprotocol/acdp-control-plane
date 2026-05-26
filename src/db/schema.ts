@@ -146,6 +146,68 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
 });
 
+// One-shot challenge nonces issued by /auth/challenge.
+// Take is atomic via DELETE..RETURNING so two concurrent /auth/token
+// callers cannot both consume the same nonce.
+export const authChallenges = pgTable(
+  'auth_challenges',
+  {
+    nonce: varchar('nonce', { length: 64 }).primaryKey(),
+    agentDid: text('agent_did').notNull(),
+    registryAuthority: varchar('registry_authority', { length: 255 }).notNull(),
+    signingInput: text('signing_input').notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('auth_challenges_expires_idx').on(t.expiresAt),
+    agentIdx: index('auth_challenges_agent_idx').on(t.agentDid),
+  }),
+);
+
+// Revoked-token list. A JWT `jti` in this table is treated as invalid
+// by verifyJwt() until its `exp` passes, after which the sweeper drops
+// the row (the JWT is already expired by ordinary verification anyway).
+export const revokedTokens = pgTable(
+  'revoked_tokens',
+  {
+    jti: varchar('jti', { length: 64 }).primaryKey(),
+    sub: text('sub').notNull(),
+    iss: text('iss').notNull(),
+    exp: bigint('exp', { mode: 'number' }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    revokedBy: text('revoked_by').notNull(),
+    reason: varchar('reason', { length: 64 }),
+  },
+  (t) => ({
+    expIdx: index('revoked_tokens_exp_idx').on(t.exp),
+    subIdx: index('revoked_tokens_sub_idx').on(t.sub),
+  }),
+);
+
+// Self-declared agent capabilities (#4). Signature gates the write so
+// a third party can't claim capabilities for an agent they don't control.
+export const agentCapabilities = pgTable(
+  'agent_capabilities',
+  {
+    agentDid: text('agent_did').notNull(),
+    capabilityUri: text('capability_uri').notNull(),
+    declaredAt: timestamp('declared_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    signedBy: text('signed_by').notNull(),
+    signature: text('signature').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentDid, t.capabilityUri] }),
+    capabilityIdx: index('agent_capabilities_capability_idx').on(t.capabilityUri),
+  }),
+);
+
 // Append-only audit ledger of token-issuance attempts. Decisions are
 // recorded for both `mint` (successful JWT) and `reject_*` (each
 // validation failure point) so operators can answer compliance
@@ -154,11 +216,9 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
 //
 // `prev_hash` / `entry_hash` build a SHA-256 hash chain across rows
 // in `id` order so post-hoc tampering with a row becomes detectable
-// at audit time (the read path can recompute the chain). This is
-// not Merkle-tree-grade tamper evidence — it does not protect
-// against an attacker who can replay-rewrite the entire tail — but
-// it's enough to detect surgical edits at audit time, and is a
-// foundation for stronger commitments later.
+// at audit time (the read path can recompute the chain). Not
+// Merkle-grade tamper proof; protects against surgical edits, not
+// full-tail rewrite.
 export const issuanceLedger = pgTable(
   'issuance_ledger',
   {
@@ -171,10 +231,7 @@ export const issuanceLedger = pgTable(
     signerIp: varchar('signer_ip', { length: 64 }),
     decision: varchar('decision', { length: 32 }).notNull(),
     decisionDetail: text('decision_detail'),
-    // Hex SHA-256 of the prior row's `entryHash` (or 64 zeros for the
-    // first row). NULL for legacy backfills.
     prevHash: varchar('prev_hash', { length: 64 }),
-    // Hex SHA-256 of (prevHash || canonical(this row)).
     entryHash: varchar('entry_hash', { length: 64 }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .notNull()
@@ -198,5 +255,11 @@ export type Registry = typeof registries.$inferSelect;
 export type Webhook = typeof webhooks.$inferSelect;
 export type NewWebhook = typeof webhooks.$inferInsert;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type AuthChallenge = typeof authChallenges.$inferSelect;
+export type NewAuthChallenge = typeof authChallenges.$inferInsert;
+export type RevokedToken = typeof revokedTokens.$inferSelect;
+export type NewRevokedToken = typeof revokedTokens.$inferInsert;
+export type AgentCapability = typeof agentCapabilities.$inferSelect;
+export type NewAgentCapability = typeof agentCapabilities.$inferInsert;
 export type IssuanceLedgerEntry = typeof issuanceLedger.$inferSelect;
 export type NewIssuanceLedgerEntry = typeof issuanceLedger.$inferInsert;

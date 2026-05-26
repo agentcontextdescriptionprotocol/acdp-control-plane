@@ -8,6 +8,9 @@
  *                         claim shape matches the registry's BearerClaims
  *                         (so consumers can validate either issuer's
  *                         tokens with the same code path in V2).
+ *   3. verifyJwt()      — verify signature + consult the revocation
+ *                         repository so admin-revoked tokens are
+ *                         rejected even before they naturally expire.
  *
  * Every decision point in `issueToken` writes one row to the
  * `IssuanceLedgerService` so compliance auditors have a complete
@@ -18,6 +21,7 @@
  * decisions testable without spinning up the HTTP layer.
  */
 import {
+  Inject,
   Injectable,
   Logger,
   Optional,
@@ -31,6 +35,10 @@ import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
 import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
+import {
+  REVOCATION_REPOSITORY,
+  RevocationRepository,
+} from './revocation-repository';
 import { verifyEd25519 } from './ed25519';
 
 export interface IssuedToken {
@@ -65,12 +73,15 @@ export class TokenIssuer {
     private readonly config: AppConfigService,
     private readonly challenges: ChallengeStore,
     private readonly pinned: PinnedKeysService,
+    @Optional()
+    @Inject(REVOCATION_REPOSITORY)
+    private readonly revocations: RevocationRepository | null = null,
     @Optional() private readonly ledger: IssuanceLedgerService | null = null,
   ) {}
 
   // ── Step 1 — challenge ────────────────────────────────────────────────
 
-  issueChallenge(agentDid: string): ChallengeRecord {
+  async issueChallenge(agentDid: string): Promise<ChallengeRecord> {
     return this.challenges.issue(
       agentDid,
       this.config.jwtAuthority,
@@ -80,7 +91,7 @@ export class TokenIssuer {
 
   // ── Step 2 — token ────────────────────────────────────────────────────
 
-  issueToken(
+  async issueToken(
     req: {
       agentDid: string;
       keyId: string;
@@ -90,7 +101,7 @@ export class TokenIssuer {
       signature: string;
     },
     ctx: IssueTokenContext = {},
-  ): IssuedToken {
+  ): Promise<IssuedToken> {
     if (req.algorithm !== 'ed25519') {
       this.ledger?.record({
         sub: req.agentDid,
@@ -105,8 +116,9 @@ export class TokenIssuer {
     }
 
     // Consume the challenge — this also enforces single-use replay
-    // defense and TTL expiry.
-    const record = this.challenges.consume(req.nonce);
+    // defense and TTL expiry (atomic via DELETE..RETURNING when on
+    // Postgres, so two concurrent /auth/token calls can't both win).
+    const record = await this.challenges.consume(req.nonce);
     if (!record) {
       this.ledger?.record({
         sub: req.agentDid,
@@ -195,16 +207,47 @@ export class TokenIssuer {
 
   // ── verify (for downstream guards / federation experiments) ──────────
 
-  verifyJwt(token: string): AcdpBearerClaims {
+  async verifyJwt(token: string): Promise<AcdpBearerClaims> {
+    let decoded: AcdpBearerClaims;
     try {
-      const decoded = jwt.verify(token, this.config.jwtSecret, {
+      decoded = jwt.verify(token, this.config.jwtSecret, {
         algorithms: ['HS256'],
         issuer: this.config.jwtAuthority,
-      });
-      return decoded as AcdpBearerClaims;
+      }) as AcdpBearerClaims;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new UnauthorizedException(`JWT verification failed: ${msg}`);
+    }
+
+    // Revocation check — short-circuits even when the JWT's own `exp`
+    // hasn't passed. Optional dep: in the tiny config that disables
+    // the revocation repository, we skip the check (and accept the
+    // V1 behavior of "tokens are valid until they expire").
+    if (this.revocations) {
+      const revoked = await this.revocations.isRevoked(decoded.jti);
+      if (revoked) {
+        throw new UnauthorizedException(`token jti=${decoded.jti} has been revoked`);
+      }
+    }
+
+    return decoded;
+  }
+
+  /**
+   * Decode a JWT without verifying — used by the revoke endpoint to
+   * extract `jti`/`sub`/`exp` so we can persist the revocation even
+   * if the token has already expired (operators may want the audit
+   * trail). Callers MUST verify separately before trusting claims.
+   */
+  decodeJwt(token: string): AcdpBearerClaims | null {
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && typeof decoded === 'object') {
+        return decoded as AcdpBearerClaims;
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 

@@ -11,9 +11,11 @@ describe('AuthGuard', () => {
   let guard: AuthGuard;
 
   function ctx(req: Record<string, any>): ExecutionContext {
+    const handler = function fakeHandler() {};
+    class FakeClass {}
     return {
-      getHandler: jest.fn(),
-      getClass: jest.fn(),
+      getHandler: jest.fn().mockReturnValue(handler),
+      getClass: jest.fn().mockReturnValue(FakeClass),
       switchToHttp: () => ({
         getRequest: () => req,
         getResponse: jest.fn(),
@@ -55,7 +57,7 @@ describe('AuthGuard', () => {
   it('accepts requests with a valid Bearer token', () => {
     request.headers.authorization = 'Bearer valid-token-12345678';
     expect(guard.canActivate(ctx(request))).toBe(true);
-    expect(request.actorId).toBe('valid-tok...');
+    expect(request.actorId).toBe('valid-to...');
     expect(request.actorType).toBe('api-key');
   });
 

@@ -1,19 +1,42 @@
 import { DynamicModule, Module } from '@nestjs/common';
+import { AppConfigService } from '../config/app-config.service';
 import { AuthGuard } from './auth.guard';
 import { AuthController } from './auth.controller';
+import { AuthSweeperService } from './auth-sweeper.service';
+import {
+  CHALLENGE_REPOSITORY,
+  ChallengeRepository,
+} from './challenge-repository';
 import { ChallengeStore } from './challenge-store.service';
 import { ConfigModule } from '../config/config.module';
+import { DatabaseService } from '../db/database.service';
+import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
+import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
+import { PostgresChallengeRepository } from './postgres-challenge.repository';
+import { PostgresRevocationRepository } from './postgres-revocation.repository';
+import {
+  REVOCATION_REPOSITORY,
+  RevocationRepository,
+} from './revocation-repository';
+import { RevokeController } from './revoke.controller';
 import { TokenIssuer } from './token-issuer.service';
 
 /**
  * Auth module — bearer-token guard (always on) + optional Phase-5 IdP.
  *
- * The IdP pieces (challenge store, pinned-key directory, JWT issuer,
- * controller) are only registered when `TOKEN_ISSUANCE_ENABLED=true`
- * at boot. Validation in AppConfigService refuses to start in
- * production with an undersized JWT secret.
+ * When `TOKEN_ISSUANCE_ENABLED=true` the IdP pieces are registered:
+ *   - `ChallengeStore` (delegates to repo)
+ *   - `TokenIssuer` (challenge → JWT, plus revocation check on verify,
+ *     plus #12 issuance-ledger audit hooks)
+ *   - `PinnedKeysService` (static directory; V2 plugs in did:web)
+ *   - `RevokeController` (RFC 7009-style revocation endpoint)
+ *   - `AuthSweeperService` (background eviction of expired rows)
+ *   - `IssuanceLedgerService` (#12 append-only audit chain)
+ *
+ * Persistence backend (`memory` vs `postgres`) is chosen by
+ * `AUTH_PERSISTENCE`. Multi-instance deployments MUST use `postgres`.
  */
 @Module({
   imports: [ConfigModule],
@@ -24,18 +47,62 @@ import { TokenIssuer } from './token-issuer.service';
 export class AuthModule {
   static forRoot(): DynamicModule {
     const issuanceEnabled = readBool(process.env.TOKEN_ISSUANCE_ENABLED);
-    const providers = [
-      AuthGuard,
-      ...(issuanceEnabled
-        ? [ChallengeStore, PinnedKeysService, TokenIssuer, IssuanceLedgerService]
-        : []),
-    ];
+
+    if (!issuanceEnabled) {
+      return {
+        module: AuthModule,
+        imports: [ConfigModule],
+        controllers: [],
+        providers: [AuthGuard],
+        exports: [AuthGuard],
+      };
+    }
+
+    const challengeRepoProvider = {
+      provide: CHALLENGE_REPOSITORY,
+      useFactory: (
+        config: AppConfigService,
+        db: DatabaseService,
+      ): ChallengeRepository =>
+        config.authPersistence === 'postgres'
+          ? new PostgresChallengeRepository(db)
+          : new InMemoryChallengeRepository(),
+      inject: [AppConfigService, DatabaseService],
+    };
+
+    const revocationRepoProvider = {
+      provide: REVOCATION_REPOSITORY,
+      useFactory: (
+        config: AppConfigService,
+        db: DatabaseService,
+      ): RevocationRepository =>
+        config.authPersistence === 'postgres'
+          ? new PostgresRevocationRepository(db)
+          : new InMemoryRevocationRepository(),
+      inject: [AppConfigService, DatabaseService],
+    };
+
     return {
       module: AuthModule,
       imports: [ConfigModule],
-      controllers: issuanceEnabled ? [AuthController] : [],
-      providers,
-      exports: [AuthGuard, ...(issuanceEnabled ? [TokenIssuer] : [])],
+      controllers: [AuthController, RevokeController],
+      providers: [
+        AuthGuard,
+        challengeRepoProvider,
+        revocationRepoProvider,
+        ChallengeStore,
+        PinnedKeysService,
+        TokenIssuer,
+        IssuanceLedgerService,
+        AuthSweeperService,
+      ],
+      exports: [
+        AuthGuard,
+        TokenIssuer,
+        IssuanceLedgerService,
+        CHALLENGE_REPOSITORY,
+        REVOCATION_REPOSITORY,
+      ],
     };
   }
 }
