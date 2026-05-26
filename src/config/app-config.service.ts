@@ -70,6 +70,20 @@ export class AppConfigService implements OnModuleInit {
    */
   readonly trustedIssuersRaw = process.env.TRUSTED_ISSUERS ?? '';
 
+  // Auth-store backend selection — drives the #8 persistent stores,
+  // the #12 issuance ledger, and any future auth tables. `memory` is
+  // correct for single-process dev/test; multi-instance deployments
+  // MUST set `postgres` so the challenge nonces and revocation list
+  // are shared across replicas. Validated against the allowed set.
+  readonly authPersistence: 'memory' | 'postgres' = (() => {
+    const raw = (process.env.AUTH_PERSISTENCE ?? 'memory').toLowerCase();
+    if (raw === 'memory' || raw === 'postgres') return raw;
+    throw new Error(
+      `AUTH_PERSISTENCE must be 'memory' or 'postgres' (got '${raw}')`,
+    );
+  })();
+  readonly authSweepIntervalSeconds = readNumber('AUTH_SWEEP_INTERVAL_SECONDS', 300);
+
   // HMAC secret used to verify incoming registry webhooks. Empty = skip (dev).
   readonly webhookSecret = process.env.WEBHOOK_SECRET ?? '';
 
@@ -100,6 +114,11 @@ export class AppConfigService implements OnModuleInit {
   readonly otelEnabled = readBoolean('OTEL_ENABLED', false);
   readonly otelServiceName = process.env.OTEL_SERVICE_NAME ?? 'acdp-control-plane';
   readonly otelExporterOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '';
+
+  // OpenAPI / Swagger
+  // Defaults to enabled in development; opt-in in production via SWAGGER_ENABLED=true.
+  readonly swaggerEnabled = readBoolean('SWAGGER_ENABLED', this.nodeEnv === 'development');
+  readonly swaggerPath = process.env.SWAGGER_PATH ?? 'docs';
 
   onModuleInit(): void {
     this.validate();
@@ -155,6 +174,13 @@ export class AppConfigService implements OnModuleInit {
       }
       if (this.challengeTtlSeconds < 30) {
         throw new Error('CHALLENGE_TTL_SECONDS must be >= 30');
+      }
+      if (this.authPersistence === 'memory') {
+        this.logger.warn(
+          'AUTH_PERSISTENCE=memory in production — challenge nonces and the ' +
+            'revocation list are NOT shared across instances. Set ' +
+            'AUTH_PERSISTENCE=postgres for multi-instance deployments.',
+        );
       }
     }
   }

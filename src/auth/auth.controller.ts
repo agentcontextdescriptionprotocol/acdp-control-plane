@@ -15,9 +15,20 @@ import {
   HttpStatus,
   Logger,
   Post,
+  Req,
 } from '@nestjs/common';
+import {
+  ApiBadRequestResponse,
+  ApiBody,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
+import type { Request } from 'express';
 
 import {
+  AuthErrorDto,
   ChallengeRequestDto,
   ChallengeResponseDto,
   TokenRequestDto,
@@ -26,6 +37,7 @@ import {
 import { Public } from './public.decorator';
 import { TokenIssuer } from './token-issuer.service';
 
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -35,8 +47,19 @@ export class AuthController {
   @Public()
   @Post('challenge')
   @HttpCode(HttpStatus.OK)
-  challenge(@Body() body: ChallengeRequestDto): ChallengeResponseDto {
-    const rec = this.issuer.issueChallenge(body.agent_id);
+  @ApiOperation({
+    summary: 'Request a one-shot signing input',
+    description:
+      'Returns a server-generated nonce + canonical signing input. The agent signs it with ' +
+      'its declared key and exchanges the signature for a bearer JWT via `POST /auth/token`. ' +
+      'Endpoint is publicly reachable — the AuthGuard skips it so an agent doesn’t need a ' +
+      'bearer to ask for one.',
+  })
+  @ApiBody({ type: ChallengeRequestDto })
+  @ApiOkResponse({ type: ChallengeResponseDto, description: 'Fresh challenge record.' })
+  @ApiBadRequestResponse({ type: AuthErrorDto, description: 'Malformed agent_id.' })
+  async challenge(@Body() body: ChallengeRequestDto): Promise<ChallengeResponseDto> {
+    const rec = await this.issuer.issueChallenge(body.agent_id);
     return {
       nonce: rec.nonce,
       registry_authority: rec.registryAuthority,
@@ -48,19 +71,55 @@ export class AuthController {
   @Public()
   @Post('token')
   @HttpCode(HttpStatus.OK)
-  token(@Body() body: TokenRequestDto): TokenResponseDto {
-    const out = this.issuer.issueToken({
-      agentDid: body.agent_id,
-      keyId: body.key_id,
-      nonce: body.nonce,
-      expiresAt: body.expires_at,
-      algorithm: body.algorithm,
-      signature: body.signature,
-    });
+  @ApiOperation({
+    summary: 'Exchange a signed challenge for a bearer JWT',
+    description:
+      'Verifies the signature against the agent’s pinned public key (V1) or did:web ' +
+      'verificationMethod (V2). On success, issues an HS256 JWT carrying `acdp` claims. ' +
+      'Tokens are short-lived; clients should refresh proactively (see TokenManager).',
+  })
+  @ApiBody({ type: TokenRequestDto })
+  @ApiOkResponse({ type: TokenResponseDto, description: 'Freshly minted JWT + expiry.' })
+  @ApiBadRequestResponse({
+    type: AuthErrorDto,
+    description: 'Unsupported algorithm or malformed signature.',
+  })
+  @ApiUnauthorizedResponse({
+    type: AuthErrorDto,
+    description:
+      'Unknown nonce, expired challenge, agent_id mismatch, missing pinned key, or bad signature.',
+  })
+  async token(
+    @Body() body: TokenRequestDto,
+    @Req() req: Request,
+  ): Promise<TokenResponseDto> {
+    const out = await this.issuer.issueToken(
+      {
+        agentDid: body.agent_id,
+        keyId: body.key_id,
+        nonce: body.nonce,
+        expiresAt: body.expires_at,
+        algorithm: body.algorithm,
+        signature: body.signature,
+      },
+      { signerIp: extractIp(req) },
+    );
     return {
       token: out.token,
       token_type: out.tokenType,
       expires_at: out.expiresAt,
     };
   }
+}
+
+/**
+ * Best-effort caller IP for audit. Prefers `X-Forwarded-For` (first
+ * hop) when present — Express's `req.ip` only reflects the proxy
+ * unless `app.set('trust proxy', ...)` is configured upstream.
+ */
+function extractIp(req: Request): string | undefined {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string') return xff.split(',')[0]!.trim();
+  if (Array.isArray(xff) && xff[0]) return xff[0];
+  return req.ip;
 }

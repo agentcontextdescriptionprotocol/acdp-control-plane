@@ -8,13 +8,23 @@
  *                         claim shape matches the registry's BearerClaims
  *                         (so consumers can validate either issuer's
  *                         tokens with the same code path in V2).
+ *   3. verifyJwt()      — verify signature + consult the revocation
+ *                         repository so admin-revoked tokens are
+ *                         rejected even before they naturally expire.
+ *
+ * Every decision point in `issueToken` writes one row to the
+ * `IssuanceLedgerService` so compliance auditors have a complete
+ * record of who requested what, when, from where, and why we
+ * accepted or rejected.
  *
  * Splitting the orchestration out of the controller keeps validation
  * decisions testable without spinning up the HTTP layer.
  */
 import {
+  Inject,
   Injectable,
   Logger,
+  Optional,
   UnauthorizedException,
   BadRequestException,
 } from '@nestjs/common';
@@ -23,7 +33,12 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { ChallengeStore, ChallengeRecord } from './challenge-store.service';
+import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
+import {
+  REVOCATION_REPOSITORY,
+  RevocationRepository,
+} from './revocation-repository';
 import { verifyEd25519 } from './ed25519';
 
 export interface IssuedToken {
@@ -41,6 +56,15 @@ export interface AcdpBearerClaims {
   acdp: { registry: string; key_id: string };
 }
 
+/**
+ * Caller context for issueToken — currently just the actor IP for
+ * audit. Other fields (user-agent, request id) can be added without
+ * breaking callers because the type is structural.
+ */
+export interface IssueTokenContext {
+  signerIp?: string;
+}
+
 @Injectable()
 export class TokenIssuer {
   private readonly logger = new Logger(TokenIssuer.name);
@@ -49,11 +73,15 @@ export class TokenIssuer {
     private readonly config: AppConfigService,
     private readonly challenges: ChallengeStore,
     private readonly pinned: PinnedKeysService,
+    @Optional()
+    @Inject(REVOCATION_REPOSITORY)
+    private readonly revocations: RevocationRepository | null = null,
+    @Optional() private readonly ledger: IssuanceLedgerService | null = null,
   ) {}
 
   // ── Step 1 — challenge ────────────────────────────────────────────────
 
-  issueChallenge(agentDid: string): ChallengeRecord {
+  async issueChallenge(agentDid: string): Promise<ChallengeRecord> {
     return this.challenges.issue(
       agentDid,
       this.config.jwtAuthority,
@@ -63,24 +91,42 @@ export class TokenIssuer {
 
   // ── Step 2 — token ────────────────────────────────────────────────────
 
-  issueToken(req: {
-    agentDid: string;
-    keyId: string;
-    nonce: string;
-    expiresAt: number;
-    algorithm: string;
-    signature: string;
-  }): IssuedToken {
+  async issueToken(
+    req: {
+      agentDid: string;
+      keyId: string;
+      nonce: string;
+      expiresAt: number;
+      algorithm: string;
+      signature: string;
+    },
+    ctx: IssueTokenContext = {},
+  ): Promise<IssuedToken> {
     if (req.algorithm !== 'ed25519') {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_alg',
+        decisionDetail: `algorithm=${req.algorithm}`,
+      });
       throw new BadRequestException(
         `Unsupported signature algorithm: '${req.algorithm}'`,
       );
     }
 
     // Consume the challenge — this also enforces single-use replay
-    // defense and TTL expiry.
-    const record = this.challenges.consume(req.nonce);
+    // defense and TTL expiry (atomic via DELETE..RETURNING when on
+    // Postgres, so two concurrent /auth/token calls can't both win).
+    const record = await this.challenges.consume(req.nonce);
     if (!record) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_nonce',
+        decisionDetail: 'unknown, expired, or already-used',
+      });
       throw new UnauthorizedException(
         'Unknown, expired, or already-used nonce',
       );
@@ -90,12 +136,26 @@ export class TokenIssuer {
     // the challenge. If a caller could swap agent_id between
     // challenge and token, they could impersonate any pinned identity.
     if (record.agentDid !== req.agentDid) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_agent_mismatch',
+        decisionDetail: `challenge=${record.agentDid} got=${req.agentDid}`,
+      });
       throw new UnauthorizedException(
         `agent_id does not match challenge owner: ` +
           `challenge=${record.agentDid} got=${req.agentDid}`,
       );
     }
     if (record.expiresAt !== req.expiresAt) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_expires_mismatch',
+        decisionDetail: `challenge=${record.expiresAt} got=${req.expiresAt}`,
+      });
       throw new UnauthorizedException(
         `expires_at does not match challenge: ` +
           `challenge=${record.expiresAt} got=${req.expiresAt}`,
@@ -106,6 +166,12 @@ export class TokenIssuer {
     // V2 will plug in did:web / DID-resolver here.
     const pinned = this.pinned.get(req.agentDid);
     if (!pinned) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_unpinned',
+      });
       throw new UnauthorizedException(
         `agent_did '${req.agentDid}' has no pinned public key on this control plane`,
       );
@@ -114,25 +180,74 @@ export class TokenIssuer {
     // Verify the signature over the canonical signing input.
     const ok = verifyEd25519(pinned.publicKey, record.signingInput, req.signature);
     if (!ok) {
+      this.ledger?.record({
+        sub: req.agentDid,
+        iss: this.config.jwtAuthority,
+        signerIp: ctx.signerIp,
+        decision: 'reject_signature',
+      });
       throw new UnauthorizedException('Signature verification failed');
     }
 
     // Mint the JWT.
-    return this.mintJwt(req.agentDid, req.keyId);
+    const issued = this.mintJwt(req.agentDid, req.keyId);
+    const decoded = jwt.decode(issued.token) as AcdpBearerClaims;
+    this.ledger?.record({
+      jti: decoded.jti,
+      sub: decoded.sub,
+      iss: decoded.iss,
+      iat: decoded.iat,
+      exp: decoded.exp,
+      signerIp: ctx.signerIp,
+      decision: 'mint',
+      decisionDetail: `key_id=${req.keyId}`,
+    });
+    return issued;
   }
 
   // ── verify (for downstream guards / federation experiments) ──────────
 
-  verifyJwt(token: string): AcdpBearerClaims {
+  async verifyJwt(token: string): Promise<AcdpBearerClaims> {
+    let decoded: AcdpBearerClaims;
     try {
-      const decoded = jwt.verify(token, this.config.jwtSecret, {
+      decoded = jwt.verify(token, this.config.jwtSecret, {
         algorithms: ['HS256'],
         issuer: this.config.jwtAuthority,
-      });
-      return decoded as AcdpBearerClaims;
+      }) as AcdpBearerClaims;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new UnauthorizedException(`JWT verification failed: ${msg}`);
+    }
+
+    // Revocation check — short-circuits even when the JWT's own `exp`
+    // hasn't passed. Optional dep: in the tiny config that disables
+    // the revocation repository, we skip the check (and accept the
+    // V1 behavior of "tokens are valid until they expire").
+    if (this.revocations) {
+      const revoked = await this.revocations.isRevoked(decoded.jti);
+      if (revoked) {
+        throw new UnauthorizedException(`token jti=${decoded.jti} has been revoked`);
+      }
+    }
+
+    return decoded;
+  }
+
+  /**
+   * Decode a JWT without verifying — used by the revoke endpoint to
+   * extract `jti`/`sub`/`exp` so we can persist the revocation even
+   * if the token has already expired (operators may want the audit
+   * trail). Callers MUST verify separately before trusting claims.
+   */
+  decodeJwt(token: string): AcdpBearerClaims | null {
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && typeof decoded === 'object') {
+        return decoded as AcdpBearerClaims;
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 
