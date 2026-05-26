@@ -140,7 +140,9 @@ export class AppConfigService implements OnModuleInit {
   readonly dbPoolIdleTimeout = readNumber('DB_POOL_IDLE_TIMEOUT', 30000);
   readonly dbPoolConnectionTimeout = readNumber('DB_POOL_CONNECTION_TIMEOUT', 5000);
 
-  // Throttler
+  // Throttler — global default applied per (actorId|ip). A tighter
+  // override applies to /auth/challenge + /auth/token; see
+  // `src/auth/auth.controller.ts` for the literal override.
   readonly throttleTtlMs = readNumber('THROTTLE_TTL_MS', 60000);
   readonly throttleLimit = readNumber('THROTTLE_LIMIT', 200);
 

@@ -7,6 +7,24 @@
  * Both are marked `@Public()` — the AuthGuard skips them so an agent
  * doesn't need a bearer token to ask for a bearer token. The endpoints
  * are mounted only when `TOKEN_ISSUANCE_ENABLED=true` (see auth.module).
+ *
+ * ## Throttling
+ *
+ * Both endpoints carry a tighter `@Throttle` override (20/min/IP) than
+ * the global default (200/min). Defends against:
+ *   - Nonce-grinding: brute-forcing the 24-byte nonce space — already
+ *     intractable, but capping the rate makes opportunistic abuse cheap
+ *     to ignore.
+ *   - Credential-stuffing: an attacker who scraped a list of (agent_id,
+ *     stolen signature) pairs can't pump them at 200/min.
+ *   - Resource exhaustion: each `/auth/token` triggers a did:web fetch,
+ *     a signature verify, a DB write — limiting the rate protects the
+ *     resolver + DB from being a DoS lever.
+ *
+ * The tracker is `req.actorId ?? req.ip` from ThrottleByUserGuard. Since
+ * these routes are `@Public()`, actorId is unset and the bucket keys on
+ * caller IP. Operators behind a proxy MUST set `app.set('trust proxy')`
+ * so the bucket keys on the real client, not the proxy hop.
  */
 import {
   Body,
@@ -25,6 +43,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
 import {
@@ -45,6 +64,7 @@ export class AuthController {
   constructor(private readonly issuer: TokenIssuer) {}
 
   @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @Post('challenge')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -69,6 +89,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
   @Post('token')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
