@@ -63,6 +63,12 @@ export class AppConfigService implements OnModuleInit {
   readonly jwtAuthority = process.env.JWT_AUTHORITY ?? 'control-plane.local';
   readonly jwtTtlSeconds = readNumber('JWT_TTL_SECONDS', 3600);
   readonly challengeTtlSeconds = readNumber('CHALLENGE_TTL_SECONDS', 300);
+  /**
+   * Federation: tokens from these peer issuers are accepted by
+   * `CrossIssuerValidator.verify`. Wire format documented in
+   * `src/auth/trusted-issuers.ts`. Empty (default) = no federation.
+   */
+  readonly trustedIssuersRaw = process.env.TRUSTED_ISSUERS ?? '';
 
   // HMAC secret used to verify incoming registry webhooks. Empty = skip (dev).
   readonly webhookSecret = process.env.WEBHOOK_SECRET ?? '';

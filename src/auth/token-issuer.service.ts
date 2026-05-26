@@ -141,11 +141,16 @@ export class TokenIssuer {
   private mintJwt(agentDid: string, keyId: string): IssuedToken {
     const now = Math.floor(Date.now() / 1000);
     const exp = now + this.config.jwtTtlSeconds;
-    const claims: AcdpBearerClaims = {
+    // `nbf` (not-before) added for federation hygiene (#2): when a
+    // cross-issuer consumer has a slightly skewed clock, `nbf == iat`
+    // bounds the acceptable window without admitting future-dated
+    // tokens. `jsonwebtoken` enforces it automatically on verify.
+    const claims: AcdpBearerClaims & { nbf: number } = {
       iss: this.config.jwtAuthority,
       sub: agentDid,
       jti: randomBytes(12).toString('base64url'),
       iat: now,
+      nbf: now,
       exp,
       acdp: {
         registry: this.config.jwtAuthority,
