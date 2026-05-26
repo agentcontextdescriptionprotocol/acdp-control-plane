@@ -2,12 +2,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, count, desc, eq, sql, SQL } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
 import { Run, runs } from '../db/schema';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 export interface ListRunsOptions {
   status?: string;
   scenarioId?: string;
   limit: number;
   offset: number;
+  /** Required when reading from a multi-tenant deployment. */
+  tenantId?: string;
 }
 
 @Injectable()
@@ -18,21 +21,27 @@ export class RunRepository {
    * Upsert a run record from an incoming event. New runs are created in
    * 'running' state; existing runs get their contexts_count and registries
    * updated.
+   *
+   * Multi-tenant note: `tenantId` defaults to `DEFAULT_TENANT_ID` so
+   * existing single-tenant callers don't have to thread it through;
+   * the AuthGuard pins it on the request for new flows.
    */
   async upsertFromEvent(
     runId: string,
     scenarioId: string,
     registryAuthority: string,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<void> {
     const existing = await this.database.db
       .select()
       .from(runs)
-      .where(eq(runs.runId, runId))
+      .where(and(eq(runs.runId, runId), eq(runs.tenantId, tenantId)))
       .limit(1);
 
     if (existing.length === 0) {
       await this.database.db.insert(runs).values({
         runId,
+        tenantId,
         scenarioId,
         status: 'running',
         contextsCount: 1,
@@ -54,13 +63,14 @@ export class RunRepository {
         registries: updatedRegistries,
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(runs.runId, runId));
+      .where(and(eq(runs.runId, runId), eq(runs.tenantId, tenantId)));
   }
 
   async markComplete(
     runId: string,
     status: string,
     result?: Record<string, unknown>,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<Run> {
     const now = new Date().toISOString();
     await this.database.db
@@ -71,31 +81,32 @@ export class RunRepository {
         result: result ?? null,
         updatedAt: now,
       })
-      .where(eq(runs.runId, runId));
-    return this.findByIdOrThrow(runId);
+      .where(and(eq(runs.runId, runId), eq(runs.tenantId, tenantId)));
+    return this.findByIdOrThrow(runId, tenantId);
   }
 
-  async findById(runId: string): Promise<Run | null> {
+  async findById(runId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<Run | null> {
     const rows = await this.database.db
       .select()
       .from(runs)
-      .where(eq(runs.runId, runId))
+      .where(and(eq(runs.runId, runId), eq(runs.tenantId, tenantId)))
       .limit(1);
     return rows[0] ?? null;
   }
 
-  async findByIdOrThrow(runId: string): Promise<Run> {
-    const row = await this.findById(runId);
+  async findByIdOrThrow(runId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<Run> {
+    const row = await this.findById(runId, tenantId);
     if (!row) throw new NotFoundException(`run ${runId} not found`);
     return row;
   }
 
   async list(opts: ListRunsOptions): Promise<{ data: Run[]; total: number }> {
-    const conditions: SQL[] = [];
+    const tenantId = opts.tenantId ?? DEFAULT_TENANT_ID;
+    const conditions: SQL[] = [eq(runs.tenantId, tenantId)];
     if (opts.status) conditions.push(eq(runs.status, opts.status));
     if (opts.scenarioId) conditions.push(eq(runs.scenarioId, opts.scenarioId));
 
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const where = and(...conditions);
 
     const [data, totalResult] = await Promise.all([
       this.database.db
