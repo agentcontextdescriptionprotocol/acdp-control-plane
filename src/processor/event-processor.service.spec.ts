@@ -76,7 +76,7 @@ describe('EventProcessorService', () => {
 
   it('upserts the run when a runId is supplied; skips when not', async () => {
     await processor.process(makePayload(), 'run-1');
-    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 's1', 'reg.example');
+    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 's1', 'reg.example', 'default');
 
     runRepo.upsertFromEvent.mockClear();
     await processor.process(makePayload(), undefined);
@@ -96,11 +96,13 @@ describe('EventProcessorService', () => {
       fromCtxId: 'acdp://reg/c1',
       toCtxId: 'acdp://reg/c3',
       runId: 'run-1',
+      tenantId: 'default',
     });
     expect(lineageRepo.upsert).toHaveBeenCalledWith({
       fromCtxId: 'acdp://reg/c2',
       toCtxId: 'acdp://reg/c3',
       runId: 'run-1',
+      tenantId: 'default',
     });
   });
 
@@ -126,8 +128,8 @@ describe('EventProcessorService', () => {
 
   it('upserts agent and registry, and fires outbound webhooks', async () => {
     await processor.process(makePayload(), 'run-1');
-    expect(agentRepo.upsert).toHaveBeenCalledWith('did:web:agent.example', 'reg.example');
-    expect(registryRepo.upsert).toHaveBeenCalledWith('reg.example');
+    expect(agentRepo.upsert).toHaveBeenCalledWith('did:web:agent.example', 'reg.example', 'default');
+    expect(registryRepo.upsert).toHaveBeenCalledWith('reg.example', undefined, 'default');
     expect(webhookService.fireEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'context_published', runId: 'run-1' }),
     );
@@ -139,13 +141,13 @@ describe('EventProcessorService', () => {
       metadata: { scenario_id: 'from-meta' },
     });
     await processor.process(payload, 'run-1');
-    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 'from-meta', 'reg.example');
+    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 'from-meta', 'reg.example', 'default');
   });
 
   it('falls back to "unknown" scenario when no scenarioId is anywhere', async () => {
     const payload = makePayload({ scenario_id: undefined });
     await processor.process(payload, 'run-1');
-    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 'unknown', 'reg.example');
+    expect(runRepo.upsertFromEvent).toHaveBeenCalledWith('run-1', 'unknown', 'reg.example', 'default');
   });
 
   it('defaults event timestamp to "now" when payload omits created_at', async () => {

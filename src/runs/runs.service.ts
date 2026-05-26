@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../config/app-config.service';
 import { Run } from '../db/schema';
 import { ListRunsOptions, RunRepository } from '../storage/run.repository';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 @Injectable()
 export class RunsService {
@@ -22,16 +23,17 @@ export class RunsService {
     return { data, total, limit: opts.limit, offset: opts.offset };
   }
 
-  async getOrThrow(runId: string): Promise<Run> {
-    return this.runRepo.findByIdOrThrow(runId);
+  async getOrThrow(runId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<Run> {
+    return this.runRepo.findByIdOrThrow(runId, tenantId);
   }
 
   async markComplete(
     runId: string,
     status: 'completed' | 'failed' | 'cancelled',
     result?: Record<string, unknown>,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<Run> {
-    const run = await this.runRepo.markComplete(runId, status, result);
+    const run = await this.runRepo.markComplete(runId, status, result, tenantId);
 
     // Optionally notify the playground that the run is complete.
     if (this.config.playgroundUrl) {

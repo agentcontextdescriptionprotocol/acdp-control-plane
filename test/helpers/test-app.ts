@@ -22,6 +22,13 @@ export interface TestAppOptions {
   webhookSecret?: string;
   /** API key for AUTH. Defaults to 'test-key'. */
   apiKey?: string;
+  /**
+   * Multi-tenant API-key mapping. When provided, sets TENANT_API_KEYS
+   * AND replaces apiKey/AUTH_API_KEYS with the union of all keys.
+   * Format: `[{tenantId, apiKey}, ...]`. See
+   * `src/tenant/tenant-context.ts::parseTenantApiKeys` for wire format.
+   */
+  tenantApiKeys?: Array<{ tenantId: string; apiKey: string }>;
 }
 
 /**
@@ -33,10 +40,22 @@ export interface TestAppOptions {
 export async function createTestApp(opts: TestAppOptions = {}): Promise<TestAppContext> {
   const apiKey = opts.apiKey ?? 'test-key';
   const webhookSecret = opts.webhookSecret ?? '';
+  const tenantApiKeys = opts.tenantApiKeys ?? [];
 
   process.env.DATABASE_URL = TEST_DB_URL;
   process.env.NODE_ENV = 'development';
-  process.env.AUTH_API_KEYS = apiKey;
+  // When tenantApiKeys is set, AUTH_API_KEYS is the union of all keys
+  // (the AuthGuard validates against this list); TENANT_API_KEYS maps
+  // each key to its tenant.
+  if (tenantApiKeys.length > 0) {
+    process.env.AUTH_API_KEYS = tenantApiKeys.map((t) => t.apiKey).join(',');
+    process.env.TENANT_API_KEYS = tenantApiKeys
+      .map((t) => `${t.tenantId}:${t.apiKey}`)
+      .join(',');
+  } else {
+    process.env.AUTH_API_KEYS = apiKey;
+    delete process.env.TENANT_API_KEYS;
+  }
   process.env.WEBHOOK_SECRET = webhookSecret;
   process.env.OTEL_ENABLED = 'false';
   process.env.LOG_LEVEL = 'warn';
