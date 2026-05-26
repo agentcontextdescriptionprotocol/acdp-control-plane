@@ -5,11 +5,16 @@
  * capability_uri)` pair is a no-op (returns the prior row's
  * `declared_at`). Discovery queries are O(1) by capability_uri thanks
  * to the secondary index on `agent_capabilities.capability_uri`.
+ *
+ * Multi-tenant: every read filters by `tenant_id`. Writes default to
+ * `DEFAULT_TENANT_ID` when the caller doesn't specify (backward
+ * compat with single-tenant deployments).
  */
 import { Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
 import { agentCapabilities, AgentCapability, NewAgentCapability } from '../db/schema';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 export interface CapabilityRow {
   agentDid: string;
@@ -28,9 +33,10 @@ export class CapabilityRepository {
    * agent can observe the server-pinned timestamp.
    */
   async declare(row: NewAgentCapability): Promise<CapabilityRow> {
+    const tenantId = row.tenantId ?? DEFAULT_TENANT_ID;
     const inserted = await this.db.db
       .insert(agentCapabilities)
-      .values(row)
+      .values({ ...row, tenantId })
       .onConflictDoNothing({
         target: [agentCapabilities.agentDid, agentCapabilities.capabilityUri],
       })
@@ -45,6 +51,7 @@ export class CapabilityRepository {
         and(
           eq(agentCapabilities.agentDid, row.agentDid),
           eq(agentCapabilities.capabilityUri, row.capabilityUri),
+          eq(agentCapabilities.tenantId, tenantId),
         ),
       )
       .limit(1);
@@ -62,19 +69,35 @@ export class CapabilityRepository {
     return rowToTriple(existing[0]!);
   }
 
-  async findByAgent(agentDid: string): Promise<CapabilityRow[]> {
+  async findByAgent(
+    agentDid: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<CapabilityRow[]> {
     const rows = await this.db.db
       .select()
       .from(agentCapabilities)
-      .where(eq(agentCapabilities.agentDid, agentDid));
+      .where(
+        and(
+          eq(agentCapabilities.agentDid, agentDid),
+          eq(agentCapabilities.tenantId, tenantId),
+        ),
+      );
     return rows.map(rowToTriple);
   }
 
-  async findByCapability(capabilityUri: string): Promise<CapabilityRow[]> {
+  async findByCapability(
+    capabilityUri: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<CapabilityRow[]> {
     const rows = await this.db.db
       .select()
       .from(agentCapabilities)
-      .where(eq(agentCapabilities.capabilityUri, capabilityUri));
+      .where(
+        and(
+          eq(agentCapabilities.capabilityUri, capabilityUri),
+          eq(agentCapabilities.tenantId, tenantId),
+        ),
+      );
     return rows.map(rowToTriple);
   }
 }
