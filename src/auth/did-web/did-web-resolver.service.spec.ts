@@ -3,7 +3,6 @@ import {
   DefaultDidFetcher,
   DidFetcher,
   DidFetchResponse,
-  DidResolutionError,
   DidWebResolverService,
 } from './did-web-resolver.service';
 import { SsrfPolicy } from './ssrf-guard';

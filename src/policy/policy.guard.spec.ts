@@ -9,7 +9,7 @@ import {
 } from './policy-decider';
 import { PolicyGuard } from './policy.guard';
 
-function ctx(req: any, action?: string): ExecutionContext {
+function ctx(req: any, _action?: string): ExecutionContext {
   const handler = function fakeHandler() {};
   class FakeClass {}
   return {
