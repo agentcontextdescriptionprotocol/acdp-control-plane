@@ -1,8 +1,4 @@
-import {
-  createPrivateKey,
-  generateKeyPairSync,
-  sign,
-} from 'node:crypto';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import {
   publicKeyFromBase64Sec1,
   publicKeyFromSec1,
