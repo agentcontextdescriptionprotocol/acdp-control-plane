@@ -88,7 +88,7 @@ describe('TokenIssuer', () => {
         keyId: 'k',
         nonce: ch.nonce,
         expiresAt: ch.expiresAt,
-        algorithm: 'ecdsa-p256',
+        algorithm: 'rsa-sha256',
         signature: signChallenge(ch.signingInput),
       }),
     ).rejects.toThrow(BadRequestException);
@@ -276,7 +276,7 @@ describe('TokenIssuer', () => {
         keyId: 'k',
         nonce: ch.nonce,
         expiresAt: ch.expiresAt,
-        algorithm: 'ecdsa-p256',
+        algorithm: 'rsa-sha256',
         signature: signChallenge(ch.signingInput),
       }),
     ).rejects.toThrow(BadRequestException);
@@ -349,5 +349,55 @@ describe('TokenIssuer', () => {
     const v = await ledger.verifyChain();
     expect(v.ok).toBe(true);
     expect(v.total).toBe(4);
+  });
+
+  // ── ECDSA-P256 + algorithm-downgrade defense (parity with registry #10) ──
+
+  it('issues a JWT for a correctly-signed ECDSA-P256 challenge', async () => {
+    const { generateKeyPairSync: gen, sign: nodeSign } = await import('node:crypto');
+    const { publicKey, privateKey } = gen('ec', { namedCurve: 'P-256' });
+    const spki = publicKey.export({ format: 'der', type: 'spki' });
+    const sec1 = Buffer.from(spki.subarray(spki.length - 65)).toString('base64');
+    const p256Did = 'did:web:cp.test:agents:p256-bob';
+    // Reload pinned dir with the P-256 entry (suffix `:ecdsa-p256`).
+    pinned.load(`${p256Did}=${sec1}:ecdsa-p256`);
+
+    const ch = await issuer.issueChallenge(p256Did);
+    const sig = nodeSign(
+      'sha256',
+      Buffer.from(ch.signingInput, 'utf-8'),
+      { key: privateKey, dsaEncoding: 'ieee-p1363' },
+    ).toString('base64');
+
+    const out = await issuer.issueToken({
+      agentDid: p256Did,
+      keyId: `${p256Did}#key-1`,
+      nonce: ch.nonce,
+      expiresAt: ch.expiresAt,
+      algorithm: 'ecdsa-p256',
+      signature: sig,
+    });
+    expect(out.tokenType).toBe('Bearer');
+  });
+
+  it('downgrade defense: ed25519 sig against P-256 pinned key → rejected', async () => {
+    const { generateKeyPairSync: gen } = await import('node:crypto');
+    const { publicKey } = gen('ec', { namedCurve: 'P-256' });
+    const spki = publicKey.export({ format: 'der', type: 'spki' });
+    const sec1 = Buffer.from(spki.subarray(spki.length - 65)).toString('base64');
+    const p256Did = 'did:web:cp.test:agents:p256-charlie';
+    pinned.load(`${p256Did}=${sec1}:ecdsa-p256`);
+
+    const ch = await issuer.issueChallenge(p256Did);
+    await expect(
+      issuer.issueToken({
+        agentDid: p256Did,
+        keyId: 'k',
+        nonce: ch.nonce,
+        expiresAt: ch.expiresAt,
+        algorithm: 'ed25519',
+        signature: signChallenge(ch.signingInput), // ed25519 sig
+      }),
+    ).rejects.toThrow(/does not match pinned algorithm/);
   });
 });

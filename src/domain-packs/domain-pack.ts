@@ -15,10 +15,7 @@
  * pack arrives.
  */
 
-// The `policyDecider` slot below is `unknown` in V1 — it'll be typed
-// to `PolicyDecider` (from `src/policy/policy-decider.ts`) once #3
-// merges. Keeping it untyped here avoids a cross-branch import that
-// would block this PR until #3 lands.
+import { PolicyDecider } from '../policy/policy-decider';
 
 export interface AgentTemplate {
   /** Stable identifier referenced by orchestrators. */
@@ -59,13 +56,11 @@ export interface DomainPack {
   /** Domain search vocab. */
   searchVocab: SearchVocab;
   /**
-   * Optional policy decider the pack ships. Typed `unknown` until #3
-   * lands; once it does this becomes `PolicyDecider` from
-   * `src/policy/policy-decider.ts`. The decider, when present,
-   * composes with the global decider (caller decides order —
-   * typically pack-first deny, global-second allow).
+   * Optional policy decider the pack ships. When present, composes
+   * with the global decider (caller decides order — typically
+   * pack-first deny, global-second allow).
    */
-  policyDecider?: unknown;
+  policyDecider?: PolicyDecider;
 }
 
 /**
