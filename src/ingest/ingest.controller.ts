@@ -10,6 +10,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { Public } from '../auth/public.decorator';
+import { CheckQuota } from '../quota/check-quota.decorator';
 import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { IngestService } from './ingest.service';
 
@@ -21,6 +22,7 @@ export class IngestController {
   @Post('acdp')
   @HttpCode(204)
   @Public()
+  @CheckQuota('publish')
   @ApiOperation({
     summary: 'Receive an ACDP webhook event from a registry. Authenticated by HMAC-SHA256.',
   })

@@ -51,6 +51,9 @@ export class AppConfigService implements OnModuleInit {
   // — bare keys (no `:` prefix) bind to the `default` tenant. Documented on
   // `src/tenant/tenant-context.ts`. Empty (default) = single-tenant deployment.
   readonly tenantApiKeysRaw = process.env.TENANT_API_KEYS ?? '';
+  // Per-tenant quota config. Wire format documented in
+  // `src/quota/quota-config.ts`. Empty (default) = no rate limits.
+  readonly tenantQuotasRaw = process.env.TENANT_QUOTAS ?? '';
 
   // ── Token issuance (Phase-5: V2 Seam IdP foundation) ───────────────────
   //
