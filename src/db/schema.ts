@@ -145,6 +145,34 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
 });
 
+// Self-declared agent capabilities.
+//
+// An agent posts `(agent_did, capability_uri)` with an Ed25519 signature
+// over `acdp-cap:v1:<agent_did>:<capability_uri>:<declared_at>`. The
+// signature gates the write so a third party can't claim capabilities
+// for an agent they don't control.
+//
+// Capability URIs use the URN form `urn:acdp:cap:<verb>:<type>:<domain>`,
+// e.g. `urn:acdp:cap:publish:data_snapshot:finance`. The ontology is
+// intentionally loose in V1 — a closed enum lands when at least three
+// real agents drive the requirements (per deferred-plan §4).
+export const agentCapabilities = pgTable(
+  'agent_capabilities',
+  {
+    agentDid: text('agent_did').notNull(),
+    capabilityUri: text('capability_uri').notNull(),
+    declaredAt: timestamp('declared_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+    signedBy: text('signed_by').notNull(),
+    signature: text('signature').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentDid, t.capabilityUri] }),
+    capabilityIdx: index('agent_capabilities_capability_idx').on(t.capabilityUri),
+  }),
+);
+
 export type ContextEvent = typeof contextEvents.$inferSelect;
 export type NewContextEvent = typeof contextEvents.$inferInsert;
 export type Run = typeof runs.$inferSelect;
@@ -155,3 +183,5 @@ export type Registry = typeof registries.$inferSelect;
 export type Webhook = typeof webhooks.$inferSelect;
 export type NewWebhook = typeof webhooks.$inferInsert;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type AgentCapability = typeof agentCapabilities.$inferSelect;
+export type NewAgentCapability = typeof agentCapabilities.$inferInsert;
