@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { CapabilityService } from './capability.service';

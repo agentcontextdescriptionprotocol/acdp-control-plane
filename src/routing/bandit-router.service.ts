@@ -150,7 +150,7 @@ function sampleGamma(shape: number): number {
   // Marsaglia + Tsang 2000.
   const d = shape - 1 / 3;
   const c = 1 / Math.sqrt(9 * d);
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const xNorm = standardNormal();
     const v = Math.pow(1 + c * xNorm, 3);
