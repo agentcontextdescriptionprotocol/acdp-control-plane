@@ -104,3 +104,20 @@ describe('AuthController OpenAPI', () => {
     expect(op?.responses?.['401']).toBeDefined();
   });
 });
+
+describe('AuthController throttling metadata', () => {
+  // Defends against the regression where @Throttle is silently removed
+  // and the credential endpoints fall back to the global 200/min default.
+  // @nestjs/throttler writes one metadata key per named-bucket override:
+  // `THROTTLER:LIMIT<name>` and `THROTTLER:TTL<name>` on the method target.
+  // We use 'default' (the canonical bucket name).
+  for (const method of ['challenge', 'token'] as const) {
+    it(`${method}() carries a tight throttle override`, () => {
+      const target = AuthController.prototype[method];
+      const limit = Reflect.getMetadata('THROTTLER:LIMITdefault', target);
+      const ttl = Reflect.getMetadata('THROTTLER:TTLdefault', target);
+      expect(limit).toBe(20);
+      expect(ttl).toBe(60_000);
+    });
+  }
+});
