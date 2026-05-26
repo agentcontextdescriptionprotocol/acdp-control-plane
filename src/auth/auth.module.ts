@@ -11,6 +11,7 @@ import { ChallengeStore } from './challenge-store.service';
 import { ConfigModule } from '../config/config.module';
 import { CrossIssuerValidator } from './cross-issuer-validator.service';
 import { DatabaseService } from '../db/database.service';
+import { DidWebResolverService } from './did-web/did-web-resolver.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IntrospectController } from './introspect.controller';
@@ -111,6 +112,7 @@ export class AuthModule {
         trustedRegistryProvider,
         ChallengeStore,
         // PinnedKeysService: provided globally by AppModule (@Global()).
+        DidWebResolverService,
         TokenIssuer,
         IssuanceLedgerService,
         AuthSweeperService,

@@ -27,6 +27,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { IsISO8601, IsIn, IsString, MinLength } from 'class-validator';
+import { CheckPolicy } from '../policy/check-policy.decorator';
 import { CapabilityService } from './capability.service';
 
 const ALG_OPTIONS = ['ed25519'] as const;
@@ -87,6 +88,7 @@ export class CapabilityController {
   constructor(private readonly service: CapabilityService) {}
 
   @Post()
+  @CheckPolicy('capability.declare')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Self-declare a capability for an agent (Ed25519-signed).',

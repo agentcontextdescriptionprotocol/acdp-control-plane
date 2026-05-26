@@ -3,10 +3,9 @@ import { Test } from '@nestjs/testing';
 import jwt from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
-import { ChallengeStore } from './challenge-store.service';
+import { CrossIssuerValidator } from './cross-issuer-validator.service';
 import { IntrospectController } from './introspect.controller';
-import { PinnedKeysService } from './pinned-keys.service';
-import { TokenIssuer } from './token-issuer.service';
+import { TrustedIssuerRegistry } from './trusted-issuers';
 
 const SECRET = 'a'.repeat(64);
 const ISS = 'cp.test';
@@ -49,22 +48,20 @@ function tokenFor(claims: ReturnType<typeof freshClaims>, secret = SECRET): stri
 describe('IntrospectController', () => {
   let controller: IntrospectController;
 
+  let trustedRegistry: TrustedIssuerRegistry;
+
   beforeEach(async () => {
     const cfg = fakeConfig();
-    // ChallengeStore needs CHALLENGE_REPOSITORY (post-#6 persistent stores).
-    // Wire in the in-memory impl so this spec stays a pure unit test.
-    const { CHALLENGE_REPOSITORY } = await import('./challenge-repository');
-    const { InMemoryChallengeRepository } = await import(
-      './in-memory-challenge.repository'
-    );
+    // Per-test registry — defaults to empty (no peer issuers). Tests
+    // that want federation seed peers via `trustedRegistry.list()`
+    // (or rebuild with the right ctor args).
+    trustedRegistry = new TrustedIssuerRegistry([]);
     const mod = await Test.createTestingModule({
       controllers: [IntrospectController],
       providers: [
         { provide: AppConfigService, useValue: cfg },
-        { provide: CHALLENGE_REPOSITORY, useValue: new InMemoryChallengeRepository() },
-        ChallengeStore,
-        PinnedKeysService,
-        TokenIssuer,
+        { provide: TrustedIssuerRegistry, useValue: trustedRegistry },
+        CrossIssuerValidator,
       ],
     }).compile();
     controller = mod.get(IntrospectController);
@@ -124,5 +121,41 @@ describe('IntrospectController', () => {
     });
     expect(wrongSig).toEqual(wrongIss);
     expect(wrongSig).toEqual({ active: false });
+  });
+
+  // ── federation (CrossIssuerValidator dispatch) ──────────────────────
+
+  it('accepts a token issued by a trusted peer (federation)', async () => {
+    const PEER_ISS = 'registry-a.peer';
+    const PEER_SECRET = 'P'.repeat(64);
+    const cfg = fakeConfig();
+    const peerRegistry = new TrustedIssuerRegistry([
+      { iss: PEER_ISS, alg: 'HS256', secret: PEER_SECRET },
+    ]);
+    const mod = await Test.createTestingModule({
+      controllers: [IntrospectController],
+      providers: [
+        { provide: AppConfigService, useValue: cfg },
+        { provide: TrustedIssuerRegistry, useValue: peerRegistry },
+        CrossIssuerValidator,
+      ],
+    }).compile();
+    const c = mod.get(IntrospectController);
+
+    const peerToken = tokenFor(
+      freshClaims({ iss: PEER_ISS, sub: 'did:web:federated-bob' }),
+      PEER_SECRET,
+    );
+    const res = await c.introspect({ token: peerToken });
+    expect(res.active).toBe(true);
+    expect(res.iss).toBe(PEER_ISS);
+    expect(res.sub).toBe('did:web:federated-bob');
+  });
+
+  it('rejects a token from an UN-trusted issuer (no oracle leak)', async () => {
+    // Default registry is empty — no peers trusted.
+    const stranger = tokenFor(freshClaims({ iss: 'attacker.example' }));
+    const res = await controller.introspect({ token: stranger });
+    expect(res).toEqual({ active: false });
   });
 });
