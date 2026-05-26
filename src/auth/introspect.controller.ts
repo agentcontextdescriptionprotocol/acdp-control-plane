@@ -109,9 +109,11 @@ export class IntrospectController {
   })
   @ApiBody({ type: IntrospectRequestDto })
   @ApiOkResponse({ type: IntrospectResponseDto })
-  introspect(@Body() body: IntrospectRequestDto): IntrospectResponseDto {
+  async introspect(
+    @Body() body: IntrospectRequestDto,
+  ): Promise<IntrospectResponseDto> {
     try {
-      const claims = this.issuer.verifyJwt(body.token);
+      const claims = await this.issuer.verifyJwt(body.token);
       return {
         active: true,
         iss: claims.iss,
