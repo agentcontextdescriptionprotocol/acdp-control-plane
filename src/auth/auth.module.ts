@@ -3,6 +3,7 @@ import { AuthGuard } from './auth.guard';
 import { AuthController } from './auth.controller';
 import { ChallengeStore } from './challenge-store.service';
 import { ConfigModule } from '../config/config.module';
+import { IntrospectController } from './introspect.controller';
 import { PinnedKeysService } from './pinned-keys.service';
 import { TokenIssuer } from './token-issuer.service';
 
@@ -32,7 +33,7 @@ export class AuthModule {
     return {
       module: AuthModule,
       imports: [ConfigModule],
-      controllers: issuanceEnabled ? [AuthController] : [],
+      controllers: issuanceEnabled ? [AuthController, IntrospectController] : [],
       providers,
       exports: [AuthGuard, ...(issuanceEnabled ? [TokenIssuer] : [])],
     };
