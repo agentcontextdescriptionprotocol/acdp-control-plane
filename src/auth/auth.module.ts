@@ -12,6 +12,7 @@ import { ConfigModule } from '../config/config.module';
 import { DatabaseService } from '../db/database.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
+import { IntrospectController } from './introspect.controller';
 import { IssuanceLedgerService } from './issuance-ledger.service';
 import { PinnedKeysService } from './pinned-keys.service';
 import { PostgresChallengeRepository } from './postgres-challenge.repository';
@@ -85,7 +86,7 @@ export class AuthModule {
     return {
       module: AuthModule,
       imports: [ConfigModule],
-      controllers: [AuthController, RevokeController],
+      controllers: [AuthController, RevokeController, IntrospectController],
       providers: [
         AuthGuard,
         challengeRepoProvider,
