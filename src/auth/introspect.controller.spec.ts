@@ -46,7 +46,7 @@ function tokenFor(claims: ReturnType<typeof freshClaims>, secret = SECRET): stri
   return jwt.sign(claims, secret, { algorithm: 'HS256', noTimestamp: true });
 }
 
-describe('IntrospectController', () => {
+describe('IntrospectController', async () => {
   let controller: IntrospectController;
 
   beforeEach(async () => {
@@ -63,9 +63,9 @@ describe('IntrospectController', () => {
     controller = mod.get(IntrospectController);
   });
 
-  it('returns active=true and full claim set for a valid token', () => {
+  it('returns active=true and full claim set for a valid token', async () => {
     const tok = tokenFor(freshClaims({ jti: 'jti-active', sub: 'did:web:alice' }));
-    const res = controller.introspect({ token: tok });
+    const res = await controller.introspect({ token: tok });
     expect(res.active).toBe(true);
     expect(res.iss).toBe(ISS);
     expect(res.sub).toBe('did:web:alice');
@@ -76,10 +76,10 @@ describe('IntrospectController', () => {
     expect(res.exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
   });
 
-  it('returns ONLY {active: false} for a signature-invalid token (RFC 7662 §2.2)', () => {
+  it('returns ONLY {active: false} for a signature-invalid token (RFC 7662 §2.2)', async () => {
     // Signed with the wrong secret — verifyJwt rejects.
     const wrongSecretToken = tokenFor(freshClaims(), 'b'.repeat(64));
-    const res = controller.introspect({ token: wrongSecretToken });
+    const res = await controller.introspect({ token: wrongSecretToken });
     expect(res.active).toBe(false);
     // No other fields leak.
     expect(res.iss).toBeUndefined();
@@ -89,30 +89,30 @@ describe('IntrospectController', () => {
     expect(res.key_id).toBeUndefined();
   });
 
-  it('returns active=false for a token with a wrong issuer', () => {
+  it('returns active=false for a token with a wrong issuer', async () => {
     const otherIssToken = tokenFor(freshClaims({ iss: 'someone-else' }));
-    const res = controller.introspect({ token: otherIssToken });
+    const res = await controller.introspect({ token: otherIssToken });
     expect(res.active).toBe(false);
   });
 
-  it('returns active=false for an expired token', () => {
+  it('returns active=false for an expired token', async () => {
     const expired = tokenFor(freshClaims({ exp: Math.floor(Date.now() / 1000) - 60 }));
-    const res = controller.introspect({ token: expired });
+    const res = await controller.introspect({ token: expired });
     expect(res.active).toBe(false);
   });
 
-  it('returns active=false for un-decodable garbage', () => {
-    const res = controller.introspect({ token: 'not-a-jwt-at-all' });
+  it('returns active=false for un-decodable garbage', async () => {
+    const res = await controller.introspect({ token: 'not-a-jwt-at-all' });
     expect(res.active).toBe(false);
   });
 
-  it('returns the same shape for two distinct failure modes (no oracle)', () => {
+  it('returns the same shape for two distinct failure modes (no oracle)', async () => {
     // Per RFC 7662 §2.2, the response for any failure must be
     // indistinguishable from any other failure.
-    const wrongSig = controller.introspect({
+    const wrongSig = await controller.introspect({
       token: tokenFor(freshClaims(), 'wrong-secret-xxxxxxxxxxxxxxxxxxxxxx'),
     });
-    const wrongIss = controller.introspect({
+    const wrongIss = await controller.introspect({
       token: tokenFor(freshClaims({ iss: 'attacker.example' })),
     });
     expect(wrongSig).toEqual(wrongIss);
