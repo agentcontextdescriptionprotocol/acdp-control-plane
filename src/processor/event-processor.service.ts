@@ -6,6 +6,7 @@ import { ContextEventRepository } from '../storage/context-event.repository';
 import { LineageEdgeRepository } from '../storage/lineage-edge.repository';
 import { RegistryRepository } from '../storage/registry.repository';
 import { RunRepository } from '../storage/run.repository';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { WebhookService } from '../webhooks/webhook.service';
 
@@ -24,7 +25,11 @@ export class EventProcessorService {
     private readonly webhookService: WebhookService,
   ) {}
 
-  async process(payload: AcdpWebhookEvent, runIdOverride?: string): Promise<void> {
+  async process(
+    payload: AcdpWebhookEvent,
+    runIdOverride?: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<void> {
     const eventType = String(payload.type ?? 'unknown');
     const ctxId = payload.ctx_id;
     const lineageId = payload.lineage_id;
@@ -40,6 +45,7 @@ export class EventProcessorService {
 
     // 1. Persist raw event
     await this.contextEventRepo.create({
+      tenantId,
       eventType,
       eventTs,
       runId: runId ?? null,
@@ -63,24 +69,25 @@ export class EventProcessorService {
         runId,
         scenarioId ?? 'unknown',
         registryAuthority,
+        tenantId,
       );
     }
 
     // 3. Lineage edges — one per derived_from entry on context_published
     if (eventType === 'context_published' && ctxId && derivedFrom.length > 0) {
       for (const fromCtxId of derivedFrom) {
-        await this.lineageRepo.upsert({ fromCtxId, toCtxId: ctxId, runId });
+        await this.lineageRepo.upsert({ fromCtxId, toCtxId: ctxId, runId, tenantId });
       }
     }
 
     // 4. Agent registry
     if (agentId) {
-      await this.agentRepo.upsert(agentId, registryAuthority);
+      await this.agentRepo.upsert(agentId, registryAuthority, tenantId);
     }
 
     // 5. Registry registry
     if (registryAuthority) {
-      await this.registryRepo.upsert(registryAuthority);
+      await this.registryRepo.upsert(registryAuthority, undefined, tenantId);
     }
 
     // 6. Pub/sub — emit to SSE subscribers (per run + global)

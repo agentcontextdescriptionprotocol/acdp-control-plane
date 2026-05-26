@@ -7,10 +7,12 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Sse,
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { Observable } from 'rxjs';
 import { AppConfigService } from '../config/app-config.service';
 import { LineageDag } from '../contracts/acdp';
@@ -20,7 +22,17 @@ import { RunCompleteDto } from '../dto/run-complete.dto';
 import { StreamHubService } from '../events/stream-hub.service';
 import { ContextEventRepository } from '../storage/context-event.repository';
 import { LineageEdgeRepository } from '../storage/lineage-edge.repository';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { RunsService } from './runs.service';
+
+type TenantedRequest = Request & { tenantId?: string };
+
+/** Pull the AuthGuard-pinned tenant id, with a safe default. */
+function tenantOf(req: TenantedRequest): string {
+  return typeof req.tenantId === 'string' && req.tenantId
+    ? req.tenantId
+    : DEFAULT_TENANT_ID;
+}
 
 @ApiTags('runs')
 @Controller('runs')
@@ -38,29 +50,35 @@ export class RunsController {
   async listRuns(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
     query: ListRunsQueryDto,
+    @Req() req: TenantedRequest,
   ) {
     return this.runsService.list({
       status: query.status,
       scenarioId: query.scenarioId,
       limit: query.limit ?? 50,
       offset: query.offset ?? 0,
+      tenantId: tenantOf(req),
     });
   }
 
   @Get(':runId')
   @ApiOperation({ summary: 'Fetch a single run.' })
-  async getRun(@Param('runId') runId: string) {
-    return this.runsService.getOrThrow(runId);
+  async getRun(@Param('runId') runId: string, @Req() req: TenantedRequest) {
+    return this.runsService.getOrThrow(runId, tenantOf(req));
   }
 
   @Get(':runId/lineage')
   @ApiOperation({
     summary: 'DAG of contexts produced in this run (nodes + directed edges).',
   })
-  async getLineage(@Param('runId') runId: string): Promise<LineageDag> {
+  async getLineage(
+    @Param('runId') runId: string,
+    @Req() req: TenantedRequest,
+  ): Promise<LineageDag> {
+    const tenantId = tenantOf(req);
     const [events, edges] = await Promise.all([
-      this.contextEventRepo.listByRun(runId),
-      this.lineageRepo.listByRun(runId),
+      this.contextEventRepo.listByRun(runId, tenantId),
+      this.lineageRepo.listByRun(runId, tenantId),
     ]);
     const nodes = events
       .filter((e) => e.eventType === 'context_published')
@@ -85,11 +103,13 @@ export class RunsController {
     @Param('runId') runId: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true }))
     query: ListEventsQueryDto,
+    @Req() req: TenantedRequest,
   ) {
     return this.contextEventRepo.listByRunFiltered({
       runId,
       eventType: query.eventType,
       limit: query.limit ?? 200,
+      tenantId: tenantOf(req),
     });
   }
 
@@ -128,7 +148,8 @@ export class RunsController {
     @Param('runId') runId: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true }))
     body: RunCompleteDto,
+    @Req() req: TenantedRequest,
   ): Promise<void> {
-    await this.runsService.markComplete(runId, body.status, body.result);
+    await this.runsService.markComplete(runId, body.status, body.result, tenantOf(req));
   }
 }

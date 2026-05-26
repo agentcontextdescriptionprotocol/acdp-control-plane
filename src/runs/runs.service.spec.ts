@@ -45,7 +45,7 @@ describe('RunsService', () => {
     runRepo.findByIdOrThrow.mockResolvedValue({ runId: 'r-1' });
     const run = await svc.getOrThrow('r-1');
     expect(run).toEqual({ runId: 'r-1' });
-    expect(runRepo.findByIdOrThrow).toHaveBeenCalledWith('r-1');
+    expect(runRepo.findByIdOrThrow).toHaveBeenCalledWith('r-1', 'default');
   });
 
   it('markComplete does not call playground when PLAYGROUND_URL is empty', async () => {
