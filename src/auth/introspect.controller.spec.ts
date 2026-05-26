@@ -4,7 +4,9 @@ import jwt from 'jsonwebtoken';
 
 import { AppConfigService } from '../config/app-config.service';
 import { CrossIssuerValidator } from './cross-issuer-validator.service';
+import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
 import { IntrospectController } from './introspect.controller';
+import { REVOCATION_REPOSITORY } from './revocation-repository';
 import { SigningMaterialService } from './signing-material.service';
 import { TrustedIssuerRegistry } from './trusted-issuers';
 
@@ -163,5 +165,76 @@ describe('IntrospectController', () => {
     const stranger = tokenFor(freshClaims({ iss: 'attacker.example' }));
     const res = await controller.introspect({ token: stranger });
     expect(res).toEqual({ active: false });
+  });
+
+  it('returns active=false for a revoked local token (revocation gated through introspect)', async () => {
+    const cfg = fakeConfig();
+    const revocations = new InMemoryRevocationRepository();
+    const mod = await Test.createTestingModule({
+      controllers: [IntrospectController],
+      providers: [
+        { provide: AppConfigService, useValue: cfg },
+        { provide: TrustedIssuerRegistry, useValue: new TrustedIssuerRegistry([]) },
+        { provide: REVOCATION_REPOSITORY, useValue: revocations },
+        SigningMaterialService,
+        CrossIssuerValidator,
+      ],
+    }).compile();
+    const c = mod.get(IntrospectController);
+    const claims = freshClaims({ jti: 'jti-revoked' });
+    const tok = tokenFor(claims);
+    // Pre-revoke.
+    await revocations.revoke({
+      jti: claims.jti,
+      sub: claims.sub,
+      iss: claims.iss,
+      exp: claims.exp,
+      revokedBy: 'test',
+      reason: 'admin_revoke',
+    });
+    const res = await c.introspect({ token: tok });
+    expect(res).toEqual({ active: false });
+  });
+
+  it('does NOT consult local revocation list for trusted-peer tokens', async () => {
+    // Peer revocation propagation is plan §9 follow-up; the local CP
+    // revocation list must not silently reject peer tokens with a
+    // colliding jti.
+    const PEER_ISS = 'registry-a.peer';
+    const PEER_SECRET = 'P'.repeat(64);
+    const cfg = fakeConfig();
+    const peerRegistry = new TrustedIssuerRegistry([
+      { iss: PEER_ISS, alg: 'HS256', secret: PEER_SECRET },
+    ]);
+    const revocations = new InMemoryRevocationRepository();
+    await revocations.revoke({
+      jti: 'jti-collide',
+      sub: 'did:web:other',
+      iss: cfg.jwtAuthority,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      revokedBy: 'test',
+      reason: 'admin_revoke',
+    });
+    const mod = await Test.createTestingModule({
+      controllers: [IntrospectController],
+      providers: [
+        { provide: AppConfigService, useValue: cfg },
+        { provide: TrustedIssuerRegistry, useValue: peerRegistry },
+        { provide: REVOCATION_REPOSITORY, useValue: revocations },
+        SigningMaterialService,
+        CrossIssuerValidator,
+      ],
+    }).compile();
+    const c = mod.get(IntrospectController);
+    const peerToken = tokenFor(
+      freshClaims({
+        iss: PEER_ISS,
+        sub: 'did:web:federated-bob',
+        jti: 'jti-collide',
+      }),
+      PEER_SECRET,
+    );
+    const res = await c.introspect({ token: peerToken });
+    expect(res.active).toBe(true);
   });
 });

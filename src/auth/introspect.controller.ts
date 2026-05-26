@@ -59,7 +59,7 @@ export class IntrospectResponseDto {
   @ApiProperty({
     description:
       'Whether the token is currently valid (signature, issuer, expiry, ' +
-      'and — when wired — revocation list all pass).',
+      'and revocation list all pass).',
     example: true,
   })
   active!: boolean;

@@ -22,10 +22,20 @@
  * so operators can audit federation traffic separately from local
  * issuance.
  */
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  UnauthorizedException,
+} from '@nestjs/common';
 import jwt, { type Algorithm } from 'jsonwebtoken';
 import { AppConfigService } from '../config/app-config.service';
 import { JwksClient } from './jwks-client';
+import {
+  REVOCATION_REPOSITORY,
+  RevocationRepository,
+} from './revocation-repository';
 import { SigningMaterialService } from './signing-material.service';
 import { AcdpBearerClaims } from './token-issuer.service';
 import { TrustedIssuer, TrustedIssuerRegistry } from './trusted-issuers';
@@ -50,6 +60,18 @@ export class CrossIssuerValidator {
     private readonly config: AppConfigService,
     private readonly trusted: TrustedIssuerRegistry,
     private readonly signing: SigningMaterialService,
+    /**
+     * Optional revocation repo. When present, locally-issued tokens whose
+     * `jti` is recorded as revoked are rejected before the caller sees
+     * `{active:true}` from introspect (previously a silent oracle).
+     *
+     * Trusted-issuer tokens are NOT consulted against the local list —
+     * each issuer owns its own revocation feed; cross-issuer revocation
+     * propagation is plan §9 follow-up and intentionally out of scope here.
+     */
+    @Optional()
+    @Inject(REVOCATION_REPOSITORY)
+    private readonly revocations: RevocationRepository | null = null,
   ) {}
 
   /**
@@ -72,14 +94,31 @@ export class CrossIssuerValidator {
       throw new UnauthorizedException('JWT missing iss claim');
     }
 
+    let claims: FederatedClaims;
     if (iss === this.config.jwtAuthority) {
-      return this.verifyLocal(token);
+      claims = this.verifyLocal(token);
+    } else {
+      const trusted = this.trusted.get(iss);
+      if (!trusted) {
+        throw new UnauthorizedException(`JWT iss='${iss}' is not trusted`);
+      }
+      claims = await this.verifyTrusted(token, trusted);
     }
-    const trusted = this.trusted.get(iss);
-    if (!trusted) {
-      throw new UnauthorizedException(`JWT iss='${iss}' is not trusted`);
+    // Revocation: consult the local list only for our own tokens. Trusted
+    // peers own their own revocation feeds — see ctor doc.
+    if (
+      this.revocations &&
+      claims.iss === this.config.jwtAuthority &&
+      claims.jti
+    ) {
+      const revoked = await this.revocations.isRevoked(claims.jti);
+      if (revoked) {
+        throw new UnauthorizedException(
+          `token jti=${claims.jti} has been revoked`,
+        );
+      }
     }
-    return this.verifyTrusted(token, trusted);
+    return claims;
   }
 
   /**
