@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../db/database.service';
 import { WebhookDelivery, webhookDeliveries } from '../db/schema';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 export interface CreateDeliveryInput {
   webhookId: string;
   event: string;
   runId: string;
   payload: Record<string, unknown>;
+  tenantId?: string;
 }
 
 @Injectable()
@@ -17,9 +19,11 @@ export class WebhookDeliveryRepository {
 
   async create(input: CreateDeliveryInput): Promise<WebhookDelivery> {
     const id = randomUUID();
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
     const now = new Date().toISOString();
     await this.database.db.insert(webhookDeliveries).values({
       id,
+      tenantId,
       webhookId: input.webhookId,
       event: input.event,
       runId: input.runId,
@@ -31,12 +35,16 @@ export class WebhookDeliveryRepository {
     const rows = await this.database.db
       .select()
       .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.id, id))
+      .where(and(eq(webhookDeliveries.id, id), eq(webhookDeliveries.tenantId, tenantId)))
       .limit(1);
     return rows[0];
   }
 
-  async markDelivered(id: string, responseStatus: number): Promise<void> {
+  async markDelivered(
+    id: string,
+    responseStatus: number,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<void> {
     const now = new Date().toISOString();
     await this.database.db
       .update(webhookDeliveries)
@@ -46,7 +54,7 @@ export class WebhookDeliveryRepository {
         lastAttemptAt: now,
         deliveredAt: now,
       })
-      .where(eq(webhookDeliveries.id, id));
+      .where(and(eq(webhookDeliveries.id, id), eq(webhookDeliveries.tenantId, tenantId)));
   }
 
   async markFailed(
@@ -54,6 +62,7 @@ export class WebhookDeliveryRepository {
     attempt: number,
     errorMessage: string,
     responseStatus?: number,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<void> {
     const now = new Date().toISOString();
     await this.database.db
@@ -65,20 +74,23 @@ export class WebhookDeliveryRepository {
         errorMessage,
         responseStatus,
       })
-      .where(eq(webhookDeliveries.id, id));
+      .where(and(eq(webhookDeliveries.id, id), eq(webhookDeliveries.tenantId, tenantId)));
   }
 
-  async listPending(): Promise<WebhookDelivery[]> {
+  async listPending(tenantId: string = DEFAULT_TENANT_ID): Promise<WebhookDelivery[]> {
     return this.database.db
       .select()
       .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.status, 'pending'));
+      .where(and(eq(webhookDeliveries.status, 'pending'), eq(webhookDeliveries.tenantId, tenantId)));
   }
 
-  async listByWebhookId(webhookId: string): Promise<WebhookDelivery[]> {
+  async listByWebhookId(
+    webhookId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<WebhookDelivery[]> {
     return this.database.db
       .select()
       .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.webhookId, webhookId));
+      .where(and(eq(webhookDeliveries.webhookId, webhookId), eq(webhookDeliveries.tenantId, tenantId)));
   }
 }

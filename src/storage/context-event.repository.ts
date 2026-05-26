@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq, gt, lt, SQL } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
 import { contextEvents, ContextEvent, NewContextEvent } from '../db/schema';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 export interface ContextEventFilter {
   runId?: string;
@@ -13,12 +14,14 @@ export interface ContextEventFilter {
   afterTs?: string;
   beforeTs?: string;
   limit?: number;
+  tenantId?: string;
 }
 
 export interface ListByRunFilter {
   runId: string;
   eventType?: string;
   limit?: number;
+  tenantId?: string;
 }
 
 @Injectable()
@@ -33,18 +36,24 @@ export class ContextEventRepository {
     return rows[0];
   }
 
-  async listByRun(runId: string): Promise<ContextEvent[]> {
+  async listByRun(
+    runId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<ContextEvent[]> {
     return this.database.db
       .select()
       .from(contextEvents)
-      .where(eq(contextEvents.runId, runId))
+      .where(and(eq(contextEvents.runId, runId), eq(contextEvents.tenantId, tenantId)))
       .orderBy(asc(contextEvents.eventTs));
   }
 
   async listByRunFiltered(
     filter: ListByRunFilter,
   ): Promise<{ data: ContextEvent[]; total: number }> {
-    const conditions: SQL[] = [eq(contextEvents.runId, filter.runId)];
+    const conditions: SQL[] = [
+      eq(contextEvents.runId, filter.runId),
+      eq(contextEvents.tenantId, filter.tenantId ?? DEFAULT_TENANT_ID),
+    ];
     if (filter.eventType) conditions.push(eq(contextEvents.eventType, filter.eventType));
     const limit = filter.limit ?? 200;
 
@@ -61,7 +70,9 @@ export class ContextEventRepository {
   async listFiltered(
     filter: ContextEventFilter,
   ): Promise<{ data: ContextEvent[]; total: number }> {
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [
+      eq(contextEvents.tenantId, filter.tenantId ?? DEFAULT_TENANT_ID),
+    ];
     if (filter.runId) conditions.push(eq(contextEvents.runId, filter.runId));
     if (filter.eventType) conditions.push(eq(contextEvents.eventType, filter.eventType));
     if (filter.agentId) conditions.push(eq(contextEvents.agentId, filter.agentId));
@@ -72,7 +83,7 @@ export class ContextEventRepository {
     if (filter.afterTs) conditions.push(gt(contextEvents.eventTs, filter.afterTs));
     if (filter.beforeTs) conditions.push(lt(contextEvents.eventTs, filter.beforeTs));
 
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const where = and(...conditions);
     const limit = filter.limit ?? 500;
 
     const [data, totalResult] = await Promise.all([
@@ -88,11 +99,14 @@ export class ContextEventRepository {
     return { data, total: Number(totalResult[0]?.value ?? 0) };
   }
 
-  async countByAgent(agentId: string): Promise<number> {
+  async countByAgent(
+    agentId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<number> {
     const result = await this.database.db
       .select({ value: count() })
       .from(contextEvents)
-      .where(eq(contextEvents.agentId, agentId));
+      .where(and(eq(contextEvents.agentId, agentId), eq(contextEvents.tenantId, tenantId)));
     return Number(result[0]?.value ?? 0);
   }
 }

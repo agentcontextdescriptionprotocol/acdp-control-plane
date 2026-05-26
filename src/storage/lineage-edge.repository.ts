@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
 import { LineageEdge, lineageEdges } from '../db/schema';
+import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 
 export interface LineageEdgeInput {
   fromCtxId: string;
   toCtxId: string;
   runId?: string;
+  tenantId?: string;
 }
 
 @Injectable()
@@ -20,28 +22,38 @@ export class LineageEdgeRepository {
         fromCtxId: input.fromCtxId,
         toCtxId: input.toCtxId,
         runId: input.runId,
+        tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
       })
       .onConflictDoNothing();
   }
 
-  async listByRun(runId: string): Promise<LineageEdge[]> {
+  async listByRun(
+    runId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<LineageEdge[]> {
     return this.database.db
       .select()
       .from(lineageEdges)
-      .where(eq(lineageEdges.runId, runId));
+      .where(and(eq(lineageEdges.runId, runId), eq(lineageEdges.tenantId, tenantId)));
   }
 
-  async listIncoming(ctxId: string): Promise<LineageEdge[]> {
+  async listIncoming(
+    ctxId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<LineageEdge[]> {
     return this.database.db
       .select()
       .from(lineageEdges)
-      .where(eq(lineageEdges.toCtxId, ctxId));
+      .where(and(eq(lineageEdges.toCtxId, ctxId), eq(lineageEdges.tenantId, tenantId)));
   }
 
-  async listOutgoing(ctxId: string): Promise<LineageEdge[]> {
+  async listOutgoing(
+    ctxId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<LineageEdge[]> {
     return this.database.db
       .select()
       .from(lineageEdges)
-      .where(eq(lineageEdges.fromCtxId, ctxId));
+      .where(and(eq(lineageEdges.fromCtxId, ctxId), eq(lineageEdges.tenantId, tenantId)));
   }
 }

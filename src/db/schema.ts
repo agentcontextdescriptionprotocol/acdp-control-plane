@@ -83,12 +83,14 @@ export const lineageEdges = pgTable(
     fromCtxId: text('from_ctx_id').notNull(),
     toCtxId: text('to_ctx_id').notNull(),
     runId: varchar('run_id', { length: 255 }),
+    tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.fromCtxId, t.toCtxId] }),
     toIdx: index('le_to_idx').on(t.toCtxId),
     fromIdx: index('le_from_idx').on(t.fromCtxId),
     runIdx: index('le_run_idx').on(t.runId),
+    tenantIdx: index('le_tenant_idx').on(t.tenantId),
   }),
 );
 
@@ -109,6 +111,7 @@ export const agents = pgTable('agents', {
 // Known registries observed through events.
 export const registries = pgTable('registries', {
   authority: varchar('authority', { length: 255 }).primaryKey(),
+  tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
   baseUrl: text('base_url'),
   firstSeen: timestamp('first_seen', { withTimezone: true, mode: 'string' })
     .notNull()
@@ -122,6 +125,7 @@ export const registries = pgTable('registries', {
 // Outbound webhook subscriptions.
 export const webhooks = pgTable('webhooks', {
   id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
   url: text('url').notNull(),
   events: jsonb('events').$type<string[]>().notNull().default([]),
   secret: varchar('secret', { length: 255 }).notNull(),
@@ -136,6 +140,7 @@ export const webhooks = pgTable('webhooks', {
 
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
   webhookId: uuid('webhook_id')
     .notNull()
     .references(() => webhooks.id, { onDelete: 'cascade' }),
@@ -203,6 +208,7 @@ export const agentCapabilities = pgTable(
   {
     agentDid: text('agent_did').notNull(),
     capabilityUri: text('capability_uri').notNull(),
+    tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
     declaredAt: timestamp('declared_at', { withTimezone: true, mode: 'string' })
       .notNull()
       .defaultNow(),
@@ -212,6 +218,7 @@ export const agentCapabilities = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.agentDid, t.capabilityUri] }),
     capabilityIdx: index('agent_capabilities_capability_idx').on(t.capabilityUri),
+    tenantIdx: index('agent_capabilities_tenant_idx').on(t.tenantId),
   }),
 );
 
