@@ -1,0 +1,115 @@
+/**
+ * Trusted-issuer registry for cross-issuer JWT validation.
+ *
+ * Lets a single bearer-token validator accept tokens issued by
+ * peer registries (the V2 "Seam IdP" experience — one challenge
+ * yields a token usable across the federation). Closes deferred-plan §2.
+ *
+ * Config wire format: `TRUSTED_ISSUERS` is a comma-separated list of
+ *
+ *   <iss>|<alg>|<secret-or-jwks-url>[|audience][|scope]
+ *
+ * Example:
+ *
+ *   TRUSTED_ISSUERS=registry-a.example|HS256|sharedsecretAAAA...,registry-b.example|HS256|sharedsecretBBBB...
+ *
+ * The pipe-delimited format is deliberately ugly so reviewers notice
+ * if a token is being trusted from somewhere unexpected. Future work
+ * (#2-followup) reads this from a typed config file (TOML/JSON) and
+ * supports JWKS-fetching RS256/EdDSA variants — for V1 we only
+ * accept HS256 shared secrets because that matches what the registry
+ * and control plane already issue. Asymmetric signing requires a
+ * larger migration (separate PR).
+ *
+ * Audit policy: every accepted trusted-issuer token logs the `iss`
+ * + `sub` + `jti` at INFO with `event=acdp.jwt.trusted_issuer_accept`
+ * so operators can audit federation traffic.
+ */
+
+export type TrustedAlg = 'HS256';
+
+export interface TrustedIssuer {
+  /** Value the JWT's `iss` claim must equal. */
+  iss: string;
+  /** Algorithm — only `HS256` in V1. */
+  alg: TrustedAlg;
+  /** Shared secret for HS256 verification. ≥32 bytes per RFC 7518 §3.2. */
+  secret: string;
+  /**
+   * Optional audience requirement — when set, the JWT's `aud` claim
+   * MUST match (string equality). Lets a control plane accept a
+   * registry-issued token only when it explicitly names the CP.
+   */
+  audience?: string;
+  /**
+   * Optional space-separated required scopes. The JWT's `scp` claim
+   * (when present) MUST contain ALL listed scopes for acceptance.
+   */
+  requiredScope?: string;
+}
+
+export class TrustedIssuerError extends Error {}
+
+/** Parse the `TRUSTED_ISSUERS` env value into a typed list. */
+export function parseTrustedIssuers(raw: string): TrustedIssuer[] {
+  const out: TrustedIssuer[] = [];
+  for (const entry of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const parts = entry.split('|');
+    if (parts.length < 3) {
+      throw new TrustedIssuerError(
+        `TRUSTED_ISSUERS entry '${entry}' has ${parts.length} fields; minimum is iss|alg|secret`,
+      );
+    }
+    const [iss, alg, secret, audience, requiredScope] = parts;
+    if (!iss || !alg || !secret) {
+      throw new TrustedIssuerError(
+        `TRUSTED_ISSUERS entry '${entry}' has an empty required field`,
+      );
+    }
+    if (alg !== 'HS256') {
+      throw new TrustedIssuerError(
+        `TRUSTED_ISSUERS entry '${entry}': only HS256 supported in V1 (got '${alg}')`,
+      );
+    }
+    if (Buffer.byteLength(secret, 'utf8') < 32) {
+      throw new TrustedIssuerError(
+        `TRUSTED_ISSUERS entry for iss='${iss}': secret < 32 bytes (HS256 RFC 7518 §3.2)`,
+      );
+    }
+    out.push({
+      iss,
+      alg: 'HS256',
+      secret,
+      audience: audience || undefined,
+      requiredScope: requiredScope || undefined,
+    });
+  }
+  return out;
+}
+
+/** Lookup by `iss` claim. Returns null when the issuer isn't trusted. */
+export class TrustedIssuerRegistry {
+  private readonly byIss: Map<string, TrustedIssuer>;
+
+  constructor(issuers: TrustedIssuer[]) {
+    this.byIss = new Map();
+    for (const i of issuers) {
+      if (this.byIss.has(i.iss)) {
+        throw new TrustedIssuerError(`duplicate trusted issuer iss='${i.iss}'`);
+      }
+      this.byIss.set(i.iss, i);
+    }
+  }
+
+  get(iss: string): TrustedIssuer | null {
+    return this.byIss.get(iss) ?? null;
+  }
+
+  size(): number {
+    return this.byIss.size;
+  }
+
+  list(): ReadonlyArray<TrustedIssuer> {
+    return Array.from(this.byIss.values());
+  }
+}

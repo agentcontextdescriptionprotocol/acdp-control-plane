@@ -9,6 +9,7 @@ import {
 } from './challenge-repository';
 import { ChallengeStore } from './challenge-store.service';
 import { ConfigModule } from '../config/config.module';
+import { CrossIssuerValidator } from './cross-issuer-validator.service';
 import { DatabaseService } from '../db/database.service';
 import { InMemoryChallengeRepository } from './in-memory-challenge.repository';
 import { InMemoryRevocationRepository } from './in-memory-revocation.repository';
@@ -23,6 +24,10 @@ import {
 } from './revocation-repository';
 import { RevokeController } from './revoke.controller';
 import { TokenIssuer } from './token-issuer.service';
+import {
+  parseTrustedIssuers,
+  TrustedIssuerRegistry,
+} from './trusted-issuers';
 
 /**
  * Auth module — bearer-token guard (always on) + optional Phase-5 IdP.
@@ -83,6 +88,17 @@ export class AuthModule {
       inject: [AppConfigService, DatabaseService],
     };
 
+    // The trusted-issuer registry is built once at module init from
+    // TRUSTED_ISSUERS. Registry is always present (empty when no
+    // peers configured) so CrossIssuerValidator's dispatch can fall
+    // through cleanly to the "iss matches self" path.
+    const trustedRegistryProvider = {
+      provide: TrustedIssuerRegistry,
+      useFactory: (config: AppConfigService) =>
+        new TrustedIssuerRegistry(parseTrustedIssuers(config.trustedIssuersRaw)),
+      inject: [AppConfigService],
+    };
+
     return {
       module: AuthModule,
       imports: [ConfigModule],
@@ -91,16 +107,20 @@ export class AuthModule {
         AuthGuard,
         challengeRepoProvider,
         revocationRepoProvider,
+        trustedRegistryProvider,
         ChallengeStore,
         PinnedKeysService,
         TokenIssuer,
         IssuanceLedgerService,
         AuthSweeperService,
+        CrossIssuerValidator,
       ],
       exports: [
         AuthGuard,
         TokenIssuer,
         IssuanceLedgerService,
+        CrossIssuerValidator,
+        TrustedIssuerRegistry,
         CHALLENGE_REPOSITORY,
         REVOCATION_REPOSITORY,
       ],
