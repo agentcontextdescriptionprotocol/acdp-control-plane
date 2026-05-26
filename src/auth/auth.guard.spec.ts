@@ -1,4 +1,4 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
 import { AppConfigService } from '../config/app-config.service';
@@ -201,5 +201,76 @@ describe('AuthGuard — JWT path (TOKEN_ISSUANCE_ENABLED=true)', () => {
     request.headers.authorization = `Bearer ${tok}`;
     await expect(guard.canActivate(ctx(request))).resolves.toBe(true);
     expect(request.tenantId).toBe('default');
+  });
+
+  it('JWT tenant claim is authoritative over X-Tenant-Id when they agree', async () => {
+    const tok = fakeJwt({ sub: 'did:web:carol' });
+    (validator.verify as jest.Mock).mockResolvedValue({
+      iss: 'cp.local',
+      sub: 'did:web:carol',
+      jti: 'j4',
+      exp: 9_999_999_999,
+      iat: 0,
+      acdp: { registry: 'cp.local', key_id: 'did:web:carol#k1' },
+      tenant: 'tenant-a',
+    });
+    request.headers.authorization = `Bearer ${tok}`;
+    request.headers['x-tenant-id'] = 'tenant-a';
+    await expect(guard.canActivate(ctx(request))).resolves.toBe(true);
+    expect(request.tenantId).toBe('tenant-a');
+  });
+
+  it('JWT tenant claim wins when X-Tenant-Id is absent', async () => {
+    const tok = fakeJwt({ sub: 'did:web:carol' });
+    (validator.verify as jest.Mock).mockResolvedValue({
+      iss: 'cp.local',
+      sub: 'did:web:carol',
+      jti: 'j5',
+      exp: 9_999_999_999,
+      iat: 0,
+      acdp: { registry: 'cp.local', key_id: 'did:web:carol#k1' },
+      tenant: 'tenant-a',
+    });
+    request.headers.authorization = `Bearer ${tok}`;
+    await expect(guard.canActivate(ctx(request))).resolves.toBe(true);
+    expect(request.tenantId).toBe('tenant-a');
+  });
+
+  it('rejects when X-Tenant-Id disagrees with the JWT tenant claim', async () => {
+    // The header is asserting a tenant the issuer didn't bind.
+    // Refuse — it's either a misconfigured client or a hostile request.
+    const tok = fakeJwt({ sub: 'did:web:dan' });
+    (validator.verify as jest.Mock).mockResolvedValue({
+      iss: 'cp.local',
+      sub: 'did:web:dan',
+      jti: 'j6',
+      exp: 9_999_999_999,
+      iat: 0,
+      acdp: { registry: 'cp.local', key_id: 'did:web:dan#k1' },
+      tenant: 'tenant-a',
+    });
+    request.headers.authorization = `Bearer ${tok}`;
+    request.headers['x-tenant-id'] = 'tenant-b';
+    await expect(guard.canActivate(ctx(request))).rejects.toThrow(ForbiddenException);
+  });
+
+  it('absent tenant claim → header still wins (backward compat with V0 tokens)', async () => {
+    // V0 tokens minted before the migration don't carry `tenant`.
+    // The header path remains the fallback so existing deployments
+    // don't break.
+    const tok = fakeJwt({ sub: 'did:web:eve' });
+    (validator.verify as jest.Mock).mockResolvedValue({
+      iss: 'cp.local',
+      sub: 'did:web:eve',
+      jti: 'j7',
+      exp: 9_999_999_999,
+      iat: 0,
+      acdp: { registry: 'cp.local', key_id: 'did:web:eve#k1' },
+      // no `tenant` field
+    });
+    request.headers.authorization = `Bearer ${tok}`;
+    request.headers['x-tenant-id'] = 'tenant-legacy';
+    await expect(guard.canActivate(ctx(request))).resolves.toBe(true);
+    expect(request.tenantId).toBe('tenant-legacy');
   });
 });

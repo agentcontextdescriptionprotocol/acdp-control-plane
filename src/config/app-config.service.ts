@@ -59,6 +59,20 @@ export class AppConfigService implements OnModuleInit {
   // Per-tenant quota config. Wire format documented in
   // `src/quota/quota-config.ts`. Empty (default) = no rate limits.
   readonly tenantQuotasRaw = process.env.TENANT_QUOTAS ?? '';
+  /**
+   * Agent → tenant mapping. Used by TokenIssuer to stamp the `tenant`
+   * claim on minted JWTs so downstream guards can bind authorization
+   * to the issuer's authoritative tenant assignment (rather than a
+   * client-supplied X-Tenant-Id header).
+   *
+   * Wire format: comma-separated `tenant_id:agent_did` entries, e.g.
+   *
+   *   TENANT_AGENTS=tenant-a:did:web:agents.example:alice,tenant-b:did:web:agents.example:bob
+   *
+   * Agents not listed fall back to `default`. Documented in
+   * `src/tenant/tenant-agents.ts`.
+   */
+  readonly tenantAgentsRaw = process.env.TENANT_AGENTS ?? '';
 
   // Policy backend selection. `static` (default) uses the in-process
   // rules engine; `opa` delegates to a sidecar via HTTP. Documented
