@@ -55,6 +55,19 @@ export class AppConfigService implements OnModuleInit {
   // `src/quota/quota-config.ts`. Empty (default) = no rate limits.
   readonly tenantQuotasRaw = process.env.TENANT_QUOTAS ?? '';
 
+  // Policy backend selection. `static` (default) uses the in-process
+  // rules engine; `opa` delegates to a sidecar via HTTP. Documented
+  // in `src/policy/opa-policy.decider.ts`.
+  readonly policyBackend: 'static' | 'opa' = (() => {
+    const raw = (process.env.POLICY_BACKEND ?? 'static').toLowerCase();
+    if (raw === 'static' || raw === 'opa') return raw;
+    throw new Error(`POLICY_BACKEND must be 'static' or 'opa' (got '${raw}')`);
+  })();
+  readonly opaBaseUrl = process.env.OPA_URL ?? 'http://localhost:8181';
+  readonly opaPackagePath = process.env.OPA_PACKAGE_PATH ?? 'acdp/policy/v1';
+  readonly opaTimeoutMs = readNumber('OPA_TIMEOUT_MS', 1500);
+  readonly opaFailOpen = readBoolean('OPA_FAIL_OPEN', false);
+
   // ── Token issuance (Phase-5: V2 Seam IdP foundation) ───────────────────
   //
   // When `tokenIssuanceEnabled` is true the control plane mounts
