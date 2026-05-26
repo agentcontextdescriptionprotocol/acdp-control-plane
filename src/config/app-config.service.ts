@@ -47,6 +47,10 @@ export class AppConfigService implements OnModuleInit {
 
   // Auth — comma-separated API keys. Empty = auth disabled (dev only).
   readonly authApiKeys = readStringList('AUTH_API_KEYS');
+  // Multi-tenant API-key mapping. Wire format: `tenantId:key,tenantId:key,bareKey`
+  // — bare keys (no `:` prefix) bind to the `default` tenant. Documented on
+  // `src/tenant/tenant-context.ts`. Empty (default) = single-tenant deployment.
+  readonly tenantApiKeysRaw = process.env.TENANT_API_KEYS ?? '';
 
   // ── Token issuance (Phase-5: V2 Seam IdP foundation) ───────────────────
   //

@@ -17,6 +17,9 @@ export const contextEvents = pgTable(
   'context_events',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    // Tenant boundary. Defaults to 'default' for backward compat with
+    // single-tenant deployments; the migration backfills existing rows.
+    tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
     eventType: varchar('event_type', { length: 64 }).notNull(),
     eventTs: timestamp('event_ts', { withTimezone: true, mode: 'string' }).notNull(),
     runId: varchar('run_id', { length: 255 }),
@@ -35,6 +38,7 @@ export const contextEvents = pgTable(
       .defaultNow(),
   },
   (t) => ({
+    tenantIdx: index('ce_tenant_idx').on(t.tenantId),
     runIdx: index('ce_run_idx').on(t.runId),
     ctxIdx: index('ce_ctx_idx').on(t.ctxId),
     tsIdx: index('ce_ts_idx').on(t.eventTs),
@@ -49,6 +53,7 @@ export const runs = pgTable(
   'runs',
   {
     runId: varchar('run_id', { length: 255 }).primaryKey(),
+    tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
     scenarioId: varchar('scenario_id', { length: 128 }).notNull(),
     status: varchar('status', { length: 32 }).notNull().default('running'),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' })
@@ -64,6 +69,7 @@ export const runs = pgTable(
       .defaultNow(),
   },
   (t) => ({
+    tenantIdx: index('runs_tenant_idx').on(t.tenantId),
     statusIdx: index('runs_status_idx').on(t.status),
     scenarioIdx: index('runs_scenario_idx').on(t.scenarioId),
     startedIdx: index('runs_started_idx').on(t.startedAt),
@@ -89,6 +95,7 @@ export const lineageEdges = pgTable(
 // Known agent DIDs observed through events.
 export const agents = pgTable('agents', {
   agentDid: text('agent_did').primaryKey(),
+  tenantId: varchar('tenant_id', { length: 255 }).notNull().default('default'),
   firstSeen: timestamp('first_seen', { withTimezone: true, mode: 'string' })
     .notNull()
     .defaultNow(),
