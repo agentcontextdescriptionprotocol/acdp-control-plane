@@ -8,7 +8,6 @@
  */
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { sql } from 'drizzle-orm';
 import { runChallengeRepositoryContract } from '../../src/auth/challenge-repository.contract';
 import { runRevocationRepositoryContract } from '../../src/auth/revocation-repository.contract';
 import { PostgresChallengeRepository } from '../../src/auth/postgres-challenge.repository';
@@ -17,7 +16,6 @@ import { DatabaseService } from '../../src/db/database.service';
 import { TEST_DB_URL } from '../helpers/test-db';
 import * as schema from '../../src/db/schema';
 import { runMigrations } from '../../src/db/migrate';
-import type { AppConfigService } from '../../src/config/app-config.service';
 
 let pool: Pool;
 let dbService: DatabaseService;
