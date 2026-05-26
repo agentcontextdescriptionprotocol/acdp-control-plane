@@ -34,7 +34,11 @@ function ctx(req: Record<string, any>): ExecutionContext {
 
 function newGuard(authApiKeys: string[], tenantApiKeysRaw = ''): { guard: AuthGuard; request: Record<string, any> } {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) };
-  const config = { authApiKeys, tenantApiKeysRaw } as AppConfigService;
+  const config = {
+    authApiKeys,
+    authAdminApiKeys: [] as string[],
+    tenantApiKeysRaw,
+  } as unknown as AppConfigService;
   const guard = new AuthGuard(reflector as unknown as Reflector, config);
   const request = { headers: {} as Record<string, any> };
   return { guard, request };

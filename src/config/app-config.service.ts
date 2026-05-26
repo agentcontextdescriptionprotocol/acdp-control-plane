@@ -47,6 +47,11 @@ export class AppConfigService implements OnModuleInit {
 
   // Auth — comma-separated API keys. Empty = auth disabled (dev only).
   readonly authApiKeys = readStringList('AUTH_API_KEYS');
+  // Subset of `AUTH_API_KEYS` that's allowed to perform admin operations
+  // (revoke any JTI, future: tenant ops, key rotation reload, etc.). Empty
+  // (default) = no admins, so only the JWT-self path can authorize sensitive
+  // operations. Documented in `src/auth/revoke.controller.ts`.
+  readonly authAdminApiKeys = readStringList('AUTH_ADMIN_API_KEYS');
   // Multi-tenant API-key mapping. Wire format: `tenantId:key,tenantId:key,bareKey`
   // — bare keys (no `:` prefix) bind to the `default` tenant. Documented on
   // `src/tenant/tenant-context.ts`. Empty (default) = single-tenant deployment.

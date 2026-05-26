@@ -76,7 +76,28 @@ describe('RevokeController', () => {
   });
 
   function req(actorId = 'admin-1') {
-    return { actorId } as any;
+    // Default to admin so the legacy tests (which predate the
+    // subject-match gate) keep exercising the happy path.
+    return { actorId, actorType: 'api-key', actorIsAdmin: true } as any;
+  }
+
+  /** Non-admin api-key caller — used by the negative-authorization tests. */
+  function nonAdminReq() {
+    return {
+      actorId: 'rando-1',
+      actorType: 'api-key',
+      actorIsAdmin: false,
+    } as any;
+  }
+
+  /** Self-revoke JWT caller (actorDid matches claims.sub). */
+  function selfReq(sub: string) {
+    return {
+      actorId: sub,
+      actorType: 'jwt',
+      actorIsAdmin: false,
+      actorDid: sub,
+    } as any;
   }
 
   it('revokes a valid JWT and reports revoked=true', async () => {
@@ -125,6 +146,44 @@ describe('RevokeController', () => {
   // Suppress lint warning about an unused sweeper import in the test setup.
   it('sweeper class is importable in tests', () => {
     expect(AuthSweeperService).toBeDefined();
+  });
+
+  // ── authorization gate ───────────────────────────────────────────────
+
+  it('403s a non-admin api-key caller (cannot revoke a token they did not own)', async () => {
+    const tok = tokenFor(freshClaims('jti-gated'));
+    await expect(
+      controller.revoke({ token: tok, reason: 'admin_revoke' }, nonAdminReq()),
+    ).rejects.toThrow(/not authorized/);
+    expect(await revocations.isRevoked('jti-gated')).toBe(false);
+  });
+
+  it('allows JWT self-revoke when actorDid matches claims.sub', async () => {
+    const tok = tokenFor(freshClaims('jti-self'));
+    const res = await controller.revoke(
+      { token: tok, reason: 'user_logout' },
+      selfReq('did:web:alice'),
+    );
+    expect(res.revoked).toBe(true);
+  });
+
+  it('403s a JWT caller whose actorDid does not match claims.sub', async () => {
+    const tok = tokenFor(freshClaims('jti-not-mine'));
+    await expect(
+      controller.revoke(
+        { token: tok, reason: 'admin_revoke' },
+        selfReq('did:web:eve'),
+      ),
+    ).rejects.toThrow(/not authorized/);
+    expect(await revocations.isRevoked('jti-not-mine')).toBe(false);
+  });
+
+  it('still returns 200 + revoked=false for un-decodable token even from a non-admin (no oracle)', async () => {
+    // The 403 gate runs AFTER decode; if decode fails we short-circuit
+    // to revoked:false, which is harmless because there's nothing to
+    // deny-list. Confirms no inadvertent oracle on the gate.
+    const res = await controller.revoke({ token: 'not-a-jwt' }, nonAdminReq());
+    expect(res.revoked).toBe(false);
   });
 });
 
