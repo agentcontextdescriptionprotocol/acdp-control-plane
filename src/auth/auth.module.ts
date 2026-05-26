@@ -25,6 +25,7 @@ import {
   REVOCATION_REPOSITORY,
   RevocationRepository,
 } from './revocation-repository';
+import { RevocationFeedController } from './revocation-feed.controller';
 import { RevokeController } from './revoke.controller';
 import { SigningMaterialService } from './signing-material.service';
 import { TokenIssuer } from './token-issuer.service';
@@ -106,7 +107,13 @@ export class AuthModule {
     return {
       module: AuthModule,
       imports: [ConfigModule],
-      controllers: [AuthController, RevokeController, IntrospectController, JwksController],
+      controllers: [
+        AuthController,
+        RevokeController,
+        IntrospectController,
+        JwksController,
+        RevocationFeedController,
+      ],
       providers: [
         AuthGuard,
         challengeRepoProvider,

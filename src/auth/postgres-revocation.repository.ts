@@ -68,6 +68,44 @@ export class PostgresRevocationRepository implements RevocationRepository {
     );
     return (result.rows[0] as { n: number })?.n ?? 0;
   }
+
+  async listSince(
+    sinceMs: number,
+    limit: number,
+  ): Promise<{ entries: RevocationRecord[]; nextCursor: number | null }> {
+    const cap = Math.max(1, Math.min(limit | 0, 500));
+    // revoked_at is a TIMESTAMP — compare against to_timestamp(sinceMs/1000).
+    const result = await this.db.db.execute(
+      sql`SELECT jti, sub, iss, exp, revoked_by, reason, revoked_at
+          FROM revoked_tokens
+          WHERE revoked_at > to_timestamp(${sinceMs} / 1000.0)
+          ORDER BY revoked_at ASC, jti ASC
+          LIMIT ${cap}`,
+    );
+    type Row = {
+      jti: string;
+      sub: string;
+      iss: string;
+      exp: string | number;
+      revoked_by: string;
+      reason: string | null;
+      revoked_at: string;
+    };
+    const entries: RevocationRecord[] = (result.rows as Row[]).map((row) => ({
+      jti: row.jti,
+      sub: row.sub,
+      iss: row.iss,
+      exp: Number(row.exp),
+      revokedBy: row.revoked_by,
+      reason: (row.reason ?? 'unspecified') as RevocationRecord['reason'],
+      revokedAt: new Date(row.revoked_at),
+    }));
+    const nextCursor =
+      entries.length === cap
+        ? (entries[entries.length - 1].revokedAt?.getTime() ?? null)
+        : null;
+    return { entries, nextCursor };
+  }
 }
 
 function nowSeconds(): number {
