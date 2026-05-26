@@ -1,8 +1,10 @@
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   Logger,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -12,6 +14,7 @@ import {
   DEFAULT_TENANT_ID,
   parseTenantApiKeys,
 } from '../tenant/tenant-context';
+import { CrossIssuerValidator } from './cross-issuer-validator.service';
 import { IS_PUBLIC_KEY } from './public.decorator';
 
 @Injectable()
@@ -28,9 +31,18 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly config: AppConfigService,
+    /**
+     * Optional JWT validator. Present when TOKEN_ISSUANCE_ENABLED=true
+     * (AuthModule.forRoot registers it). When absent, the guard falls
+     * back to api-key-only authentication and JWT-shaped tokens are
+     * rejected as "invalid token".
+     */
+    @Optional()
+    @Inject(CrossIssuerValidator)
+    private readonly jwtValidator: CrossIssuerValidator | null = null,
   ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -48,6 +60,44 @@ export class AuthGuard implements CanActivate {
 
     if (!token) {
       throw new UnauthorizedException('Empty authorization token');
+    }
+
+    // Dispatch on token shape. A compact JWT has exactly two dots
+    // separating three base64url segments; api keys are opaque
+    // strings without that structure. We do NOT fall back from a
+    // failed JWT verify to api-key matching — silently accepting a
+    // forged-but-malformed JWT as an api-key would be an oracle.
+    if (looksLikeJwt(token)) {
+      if (!this.jwtValidator) {
+        throw new UnauthorizedException(
+          'JWT presented but TOKEN_ISSUANCE_ENABLED=false',
+        );
+      }
+      let claims;
+      try {
+        claims = await this.jwtValidator.verify(token);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.logger.warn(`JWT auth rejected: ${msg}`);
+        throw new UnauthorizedException('Invalid authorization token');
+      }
+      // Local issuance: DIDs are the canonical subject. Federated
+      // tokens carry the same shape (sub = did:web:…). We use sub as
+      // both actorId (for logging) and actorDid (for policy / revoke).
+      request.actorId = claims.sub;
+      request.actorDid = claims.sub;
+      request.actorType = 'jwt';
+      request.actorIsAdmin = false; // admin is api-key-gated today
+      // Tenant: prefer an explicit X-Tenant-Id header (set by trusted
+      // proxies / federated peers); fall back to DEFAULT_TENANT_ID.
+      // A future migration will lift tenant from a JWT claim once
+      // multi-tenant issuance is taught to mint it (plan §6).
+      const explicit = request.headers?.['x-tenant-id'];
+      request.tenantId =
+        typeof explicit === 'string' && explicit.length > 0
+          ? explicit
+          : DEFAULT_TENANT_ID;
+      return true;
     }
 
     const validTokens = this.config.authApiKeys;
@@ -75,4 +125,15 @@ export class AuthGuard implements CanActivate {
     }
     return this.tenantLookup.get(apiKey) ?? DEFAULT_TENANT_ID;
   }
+}
+
+/**
+ * RFC 7519 compact-JWT shape: three base64url segments separated by
+ * dots. We don't enforce the segment alphabet here — that's the
+ * verifier's job — but the dot count uniquely separates JWTs from
+ * opaque api keys (which the rest of the codebase has never let
+ * contain '.').
+ */
+function looksLikeJwt(token: string): boolean {
+  return token.split('.').length === 3;
 }

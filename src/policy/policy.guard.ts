@@ -63,8 +63,17 @@ export class PolicyGuard implements CanActivate {
     }
 
     const req = context.switchToHttp().getRequest();
+    // subjectDid prefers the JWT-bound DID (actorDid) over the legacy
+    // actorId — the latter is just an api-key prefix and can't match
+    // any DID-keyed policy rule (audience checks, OPA `subject_did`).
+    const subject =
+      (typeof req.actorDid === 'string' && req.actorDid.length > 0
+        ? req.actorDid
+        : typeof req.actorId === 'string'
+          ? req.actorId
+          : '') || '';
     const policyReq: PolicyRequest = {
-      subjectDid: typeof req.actorId === 'string' ? req.actorId : '',
+      subjectDid: subject,
       action,
       // V1: best-effort resource extraction from params (runId/ctxId/etc.).
       resourceId: extractResourceId(req),
