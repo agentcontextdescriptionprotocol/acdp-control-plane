@@ -40,6 +40,11 @@ import {
 } from './ecdsa-p256';
 import { publicKeyFromBase64, verifyEd25519 } from './ed25519';
 import { IssuanceLedgerService } from './issuance-ledger.service';
+import {
+  buildAgentTenantLookup,
+  parseTenantAgents,
+  tenantForAgent,
+} from '../tenant/tenant-agents';
 import { PinnedKey, PinnedKeysService } from './pinned-keys.service';
 import {
   REVOCATION_REPOSITORY,
@@ -62,6 +67,14 @@ export interface AcdpBearerClaims {
   iat: number;
   exp: number;
   acdp: { registry: string; key_id: string };
+  /**
+   * Tenant the token was issued under. When present, downstream guards
+   * use this as the authoritative tenant for the request — preferred
+   * over the X-Tenant-Id header so a caller can't forge a tenant they
+   * weren't actually issued for. Optional for backward compatibility
+   * with V0 tokens that pre-date tenant binding; absent → 'default'.
+   */
+  tenant?: string;
 }
 
 /**
@@ -76,6 +89,8 @@ export interface IssueTokenContext {
 @Injectable()
 export class TokenIssuer {
   private readonly logger = new Logger(TokenIssuer.name);
+  /** Lazy lookup, built from TENANT_AGENTS at first mint. */
+  private agentTenantLookup: Map<string, string> | null = null;
 
   constructor(
     private readonly config: AppConfigService,
@@ -363,6 +378,12 @@ export class TokenIssuer {
     // cross-issuer consumer has a slightly skewed clock, `nbf == iat`
     // bounds the acceptable window without admitting future-dated
     // tokens. `jsonwebtoken` enforces it automatically on verify.
+    if (this.agentTenantLookup === null) {
+      this.agentTenantLookup = buildAgentTenantLookup(
+        parseTenantAgents(this.config.tenantAgentsRaw),
+      );
+    }
+    const tenant = tenantForAgent(this.agentTenantLookup, agentDid);
     const claims: AcdpBearerClaims & { nbf: number } = {
       iss: this.config.jwtAuthority,
       sub: agentDid,
@@ -374,6 +395,7 @@ export class TokenIssuer {
         registry: this.config.jwtAuthority,
         key_id: keyId,
       },
+      tenant,
     };
     const opts: SignOptions = {
       algorithm: this.signing.material.algorithm as Algorithm,

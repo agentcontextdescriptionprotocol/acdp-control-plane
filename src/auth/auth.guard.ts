@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -88,15 +89,29 @@ export class AuthGuard implements CanActivate {
       request.actorDid = claims.sub;
       request.actorType = 'jwt';
       request.actorIsAdmin = false; // admin is api-key-gated today
-      // Tenant: prefer an explicit X-Tenant-Id header (set by trusted
-      // proxies / federated peers); fall back to DEFAULT_TENANT_ID.
-      // A future migration will lift tenant from a JWT claim once
-      // multi-tenant issuance is taught to mint it (plan §6).
-      const explicit = request.headers?.['x-tenant-id'];
-      request.tenantId =
-        typeof explicit === 'string' && explicit.length > 0
-          ? explicit
-          : DEFAULT_TENANT_ID;
+      // Tenant binding order of precedence (claim > header):
+      //   1. `tenant` claim in the JWT (authoritative — minted by the
+      //      issuer, signed, can't be forged by the bearer).
+      //   2. `X-Tenant-Id` header (legacy; trust-on-input).
+      //   3. DEFAULT_TENANT_ID.
+      // If both 1 and 2 are present and disagree, reject — the
+      // header is asserting a tenant the issuer didn't actually
+      // bind. That's a hostile request.
+      const headerTenant = readHeaderTenant(request.headers);
+      const claimTenant =
+        typeof (claims as { tenant?: unknown }).tenant === 'string' &&
+        (claims as { tenant: string }).tenant.length > 0
+          ? (claims as { tenant: string }).tenant
+          : null;
+      if (claimTenant && headerTenant && headerTenant !== claimTenant) {
+        this.logger.warn(
+          `tenant assertion mismatch: claim=${claimTenant} header=${headerTenant} sub=${claims.sub}`,
+        );
+        throw new ForbiddenException(
+          'X-Tenant-Id does not match the tenant the token was issued under',
+        );
+      }
+      request.tenantId = claimTenant ?? headerTenant ?? DEFAULT_TENANT_ID;
       return true;
     }
 
@@ -136,4 +151,14 @@ export class AuthGuard implements CanActivate {
  */
 function looksLikeJwt(token: string): boolean {
   return token.split('.').length === 3;
+}
+
+function readHeaderTenant(headers: unknown): string | null {
+  if (!headers || typeof headers !== 'object') return null;
+  const v = (headers as Record<string, unknown>)['x-tenant-id'];
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return null;
 }

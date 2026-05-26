@@ -24,6 +24,7 @@ function fakeConfig(): any {
     jwtTtlSeconds: 3600,
     challengeTtlSeconds: 300,
     authPersistence: 'memory',
+    tenantAgentsRaw: '',
   };
 }
 

@@ -20,6 +20,7 @@ function fakeConfig(): any {
     jwtAuthority: 'cp.test',
     jwtTtlSeconds: 3600,
     challengeTtlSeconds: 300,
+    tenantAgentsRaw: '',
   };
 }
 
@@ -86,6 +87,41 @@ describe('TokenIssuer', () => {
     expect(decoded.acdp.registry).toBe('cp.test');
     expect(decoded.acdp.key_id).toBe(`${did}#key-1`);
     expect(decoded.jti).toBeTruthy();
+    // Unlisted agent gets the default tenant claim.
+    expect(decoded.tenant).toBe('default');
+  });
+
+  it('stamps the agent\'s tenant claim from TENANT_AGENTS', async () => {
+    const cfg = fakeConfig();
+    cfg.tenantAgentsRaw = `tenant-blue:${did}`;
+    const localStore = new ChallengeStore(new InMemoryChallengeRepository());
+    const localPinned = new PinnedKeysService();
+    const { privateKey, rawPubB64 } = generateAgent();
+    localPinned.load(`${did}=${rawPubB64}`);
+    const localRevocations = new InMemoryRevocationRepository();
+    const localLedger = new IssuanceLedgerService(cfg, {} as any);
+    const localIssuer = new TokenIssuer(
+      cfg,
+      localStore,
+      localPinned,
+      { material: buildSigningMaterial({ algorithm: 'HS256', hsSecret: cfg.jwtSecret }) } as any,
+      localRevocations,
+      localLedger,
+    );
+    const ch = await localIssuer.issueChallenge(did);
+    const out = await localIssuer.issueToken({
+      agentDid: did,
+      keyId: `${did}#key-1`,
+      nonce: ch.nonce,
+      expiresAt: ch.expiresAt,
+      algorithm: 'ed25519',
+      signature: sign(null, Buffer.from(ch.signingInput), privateKey).toString('base64'),
+    });
+    const decoded = jwt.verify(out.token, cfg.jwtSecret, {
+      algorithms: ['HS256'],
+      issuer: 'cp.test',
+    }) as AcdpBearerClaims;
+    expect(decoded.tenant).toBe('tenant-blue');
   });
 
   it('rejects an unsupported algorithm', async () => {
