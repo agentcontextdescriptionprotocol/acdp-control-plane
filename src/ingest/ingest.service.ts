@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { AppConfigService } from '../config/app-config.service';
 import { AcdpWebhookEvent } from '../contracts/acdp';
+import { DomainPackRegistry } from '../domain-packs/domain-pack';
 import { EventProcessorService } from '../processor/event-processor.service';
 import { DEFAULT_TENANT_ID } from '../tenant/tenant-context';
 import { verifyWebhookSignature } from './hmac';
@@ -12,6 +13,7 @@ export class IngestService {
   constructor(
     private readonly config: AppConfigService,
     private readonly processor: EventProcessorService,
+    private readonly domainPacks: DomainPackRegistry,
   ) {}
 
   async handle(
@@ -39,6 +41,24 @@ export class IngestService {
     }
     if (!payload.agent_id) {
       throw new BadRequestException('Missing required field: agent_id');
+    }
+    // Domain-pack context-type gate (plan §1). Only active when at least
+    // one pack is registered — keeps deployments without DOMAIN_PACKS set
+    // behaving exactly as before. The union of every pack's
+    // `contextTypes[].contextType` is the allowlist.
+    const packs = this.domainPacks.list();
+    if (packs.length > 0 && payload.context_type !== undefined && payload.context_type !== null) {
+      const allowed = new Set<string>();
+      for (const p of packs) {
+        for (const ct of p.contextTypes) allowed.add(ct.contextType);
+      }
+      const requested = String(payload.context_type);
+      if (!allowed.has(requested)) {
+        throw new BadRequestException(
+          `context_type '${requested}' not declared by any active domain pack ` +
+            `(${packs.map((p) => p.id).join(', ')})`,
+        );
+      }
     }
     // registry_authority is required, but the ACDP registry's WebhookEvent
     // doesn't include it explicitly — fall back to extracting it from

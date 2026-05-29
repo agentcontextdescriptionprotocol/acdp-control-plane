@@ -8,6 +8,7 @@ import { CapabilityRepository } from './agents/capability.repository';
 import { CapabilityService } from './agents/capability.service';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
+import { PinnedKeysAdminController } from './auth/pinned-keys-admin.controller';
 import { PinnedKeysService } from './auth/pinned-keys.service';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
 import { AppConfigService } from './config/app-config.service';
@@ -16,6 +17,7 @@ import { ContextsController } from './contexts/contexts.controller';
 import { DashboardController } from './dashboard/dashboard.controller';
 import { DashboardService } from './dashboard/dashboard.service';
 import { DatabaseModule } from './db/database.module';
+import { DomainPacksModule } from './domain-packs/domain-packs.module';
 import { EventsController } from './events/events.controller';
 import { MemoryStreamHubStrategy } from './events/memory-stream-hub.strategy';
 import { RedisStreamHubStrategy } from './events/redis-stream-hub.strategy';
@@ -53,6 +55,10 @@ import { WebhookService } from './webhooks/webhook.service';
     AuthModule.forRoot(),
     PolicyModule,
     QuotaModule,
+    // DomainPacksModule is @Global() so IngestService + the GET
+    // /domain-packs controller can share one registry instance. Boot
+    // fails fast if DOMAIN_PACKS names an unknown pack.
+    DomainPacksModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [AppConfigService],
@@ -73,6 +79,12 @@ import { WebhookService } from './webhooks/webhook.service';
     WebhookController,
     HealthController,
     MetricsController,
+    // Admin: pinned-key directory reload. Mounted at AppModule level
+    // because the underlying PinnedKeysService is registered globally
+    // here (not in AuthModule), and the endpoint is useful even when
+    // TOKEN_ISSUANCE_ENABLED=false (capability declarations still
+    // depend on the pinned-key directory).
+    PinnedKeysAdminController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },

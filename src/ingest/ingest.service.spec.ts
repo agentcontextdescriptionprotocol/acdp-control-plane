@@ -1,6 +1,8 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
 import { AppConfigService } from '../config/app-config.service';
+import { DomainPackRegistry } from '../domain-packs/domain-pack';
+import { FINANCE_PACK } from '../domain-packs/finance.pack';
 import { EventProcessorService } from '../processor/event-processor.service';
 import { extractAuthorityFromCtxId, IngestService } from './ingest.service';
 
@@ -15,6 +17,7 @@ describe('IngestService', () => {
 
   let processor: { process: jest.Mock };
   let config: Partial<AppConfigService>;
+  let packs: DomainPackRegistry;
   let service: IngestService;
 
   function sign(body: Buffer): string {
@@ -24,9 +27,11 @@ describe('IngestService', () => {
   beforeEach(() => {
     processor = { process: jest.fn().mockResolvedValue(undefined) };
     config = { webhookSecret: secret } as Partial<AppConfigService>;
+    packs = new DomainPackRegistry(); // empty → context-type gate is inactive
     service = new IngestService(
       config as AppConfigService,
       processor as unknown as EventProcessorService,
+      packs,
     );
   });
 
@@ -99,10 +104,54 @@ describe('IngestService', () => {
     service = new IngestService(
       emptySecretConfig as AppConfigService,
       processor as unknown as EventProcessorService,
+      packs,
     );
     const body = Buffer.from(JSON.stringify(validPayload));
     await service.handle(body, '', undefined);
     expect(processor.process).toHaveBeenCalledTimes(1);
+  });
+
+  describe('domain-pack context-type gate', () => {
+    it('rejects events whose context_type is not declared by any active pack', async () => {
+      const reg = new DomainPackRegistry();
+      reg.register(FINANCE_PACK);
+      service = new IngestService(
+        config as AppConfigService,
+        processor as unknown as EventProcessorService,
+        reg,
+      );
+      const body = Buffer.from(
+        JSON.stringify({ ...validPayload, context_type: 'task' }),
+      );
+      await expect(
+        service.handle(body, sign(body), undefined),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(processor.process).not.toHaveBeenCalled();
+    });
+
+    it('accepts events whose context_type matches a pack-declared type', async () => {
+      const reg = new DomainPackRegistry();
+      reg.register(FINANCE_PACK);
+      service = new IngestService(
+        config as AppConfigService,
+        processor as unknown as EventProcessorService,
+        reg,
+      );
+      const body = Buffer.from(
+        JSON.stringify({ ...validPayload, context_type: 'earnings_report' }),
+      );
+      await service.handle(body, sign(body), undefined);
+      expect(processor.process).toHaveBeenCalledTimes(1);
+    });
+
+    it('is a no-op when no packs are registered (backward compat)', async () => {
+      // service from beforeEach uses an empty registry
+      const body = Buffer.from(
+        JSON.stringify({ ...validPayload, context_type: 'anything-goes' }),
+      );
+      await service.handle(body, sign(body), undefined);
+      expect(processor.process).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('extracts registry_authority from ctx_id when the payload omits it', async () => {
