@@ -29,6 +29,20 @@ export interface TestAppOptions {
    * `src/tenant/tenant-context.ts::parseTenantApiKeys` for wire format.
    */
   tenantApiKeys?: Array<{ tenantId: string; apiKey: string }>;
+  /**
+   * Domain packs to activate. Sets DOMAIN_PACKS env var for the duration
+   * of this app. Empty / undefined → packs disabled (default). Used by
+   * the domain-packs integration test; other suites should leave this
+   * alone so they don't trip the context-type gate.
+   */
+  domainPacks?: string;
+  /**
+   * Admin api key. When provided, joins the AUTH_API_KEYS union AND
+   * sets AUTH_ADMIN_API_KEYS so the AuthGuard flags requests carrying
+   * this key as `actorIsAdmin = true`. Used by admin-only endpoint
+   * tests (revocation feed, pinned-keys reload).
+   */
+  adminApiKey?: string;
 }
 
 /**
@@ -56,11 +70,29 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestAppC
     process.env.AUTH_API_KEYS = apiKey;
     delete process.env.TENANT_API_KEYS;
   }
+  if (opts.adminApiKey) {
+    // Union the admin key into AUTH_API_KEYS so AuthGuard accepts it,
+    // then mark it as admin via AUTH_ADMIN_API_KEYS.
+    const existing = process.env.AUTH_API_KEYS ?? '';
+    const set = new Set(
+      existing.split(',').map((s) => s.trim()).filter(Boolean),
+    );
+    set.add(opts.adminApiKey);
+    process.env.AUTH_API_KEYS = Array.from(set).join(',');
+    process.env.AUTH_ADMIN_API_KEYS = opts.adminApiKey;
+  } else {
+    delete process.env.AUTH_ADMIN_API_KEYS;
+  }
   process.env.WEBHOOK_SECRET = webhookSecret;
   process.env.OTEL_ENABLED = 'false';
   process.env.LOG_LEVEL = 'warn';
   process.env.PLAYGROUND_URL = '';
   process.env.STREAM_SSE_HEARTBEAT_MS = '60000';
+  if (opts.domainPacks) {
+    process.env.DOMAIN_PACKS = opts.domainPacks;
+  } else {
+    delete process.env.DOMAIN_PACKS;
+  }
 
   // Clear Prometheus registry — prevents duplicate-metric errors across suites.
   promClient.register.clear();

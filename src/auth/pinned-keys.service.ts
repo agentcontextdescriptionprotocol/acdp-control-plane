@@ -2,23 +2,34 @@
  * Pinned agent-key directory.
  *
  * Reads `CONTROL_PLANE_PINNED_KEYS` (comma-separated
- * `agent_did=public_key_b64[:algorithm]` entries) at boot. Used by
- * the token issuer to verify challenge signatures without standing
- * up a full did:web resolver.
+ * `agent_did=public_key_b64[:algorithm][:validFrom..validUntil]` entries)
+ * at boot. Used by the token issuer to verify challenge signatures
+ * without standing up a full did:web resolver.
  *
  * Wire format:
  *
- *   did:web:alice=BASE64KEY                   # defaults to ed25519
- *   did:web:bob=BASE64KEY:ecdsa-p256
+ *   did:web:alice=BASE64KEY                                  # ed25519, no window
+ *   did:web:bob=BASE64KEY:ecdsa-p256                         # algo only
+ *   did:web:alice=BASE64KEY:1700000000..1800000000           # window only
+ *   did:web:alice=BASE64KEY:ed25519:1700000000..1800000000   # algo + window
+ *   did:web:alice=BASE64KEY:..1800000000                     # open from
+ *   did:web:alice=BASE64KEY:1700000000..                     # open until
  *
- * Backward compat: an entry without `:algorithm` is treated as
- * `ed25519`, matching the V1 behavior.
+ * Window bounds are unix seconds, validFrom inclusive, validUntil
+ * exclusive — mirrors the registry's `[playground] pinned_keys`
+ * `valid_from`/`valid_until` semantics so an operator who maintains
+ * one list also maintains the other.
  *
- * Mirrors the registry's `[playground] pinned_keys` config exactly so
- * an operator who maintains one list also maintains the other.
+ * Backward compat: entries without `:algorithm` are treated as
+ * `ed25519`; entries without a window are valid forever.
+ *
+ * Window enforcement at `get()`: when the current time is outside an
+ * entry's window the lookup returns `undefined`, so callers (e.g.
+ * `TokenIssuer`) fall through to did:web resolution — the dispatch
+ * the rest of the codebase already implements for "no pin" cases.
  *
  * Marked `@Global()` so cross-module consumers (`CapabilityService`,
- * future `DidWebResolverService` fallback) share one directory
+ * `TokenIssuer`, and the admin reload controller) share one directory
  * instead of constructing per-module copies.
  */
 import { Global, Injectable, Logger, OnModuleInit } from '@nestjs/common';
@@ -33,6 +44,10 @@ export interface PinnedKey {
   algorithm: PinnedAlgorithm;
   publicKey: KeyObject;
   rawB64: string;
+  /** Unix seconds (inclusive). `undefined` = open from beginning of time. */
+  validFromSec?: number;
+  /** Unix seconds (exclusive). `undefined` = no expiry. */
+  validUntilSec?: number;
 }
 
 @Global()
@@ -46,8 +61,20 @@ export class PinnedKeysService implements OnModuleInit {
     this.load(raw);
   }
 
-  /** Reset and reload from a raw env-string. Exposed for tests. */
-  load(raw: string): void {
+  /**
+   * Reset and reload from a raw env-string.
+   *
+   * Atomic: the in-memory map is replaced wholesale only after every
+   * entry has been parsed + decoded successfully. A parse error on any
+   * entry logs a warning and skips that entry (mirroring the original
+   * lenient behavior); the rest still load.
+   *
+   * Exposed for tests and for the admin reload endpoint
+   * (`POST /admin/pinned-keys/reload`).
+   *
+   * Returns the count of entries that loaded successfully.
+   */
+  load(raw: string): number {
     const next = new Map<string, PinnedKey>();
     if (raw.trim()) {
       for (const entry of raw.split(',')) {
@@ -65,10 +92,17 @@ export class PinnedKeysService implements OnModuleInit {
         const did = trimmed.slice(0, eq).trim();
         const rhs = trimmed.slice(eq + 1).trim();
         if (!did || !rhs) continue;
-        const { keyB64, algorithm } = splitKeyAndAlgorithm(rhs);
         try {
-          const key = decodePublicKey(keyB64, algorithm);
-          next.set(did, { agentDid: did, algorithm, publicKey: key, rawB64: keyB64 });
+          const parsed = parseKeyEntry(rhs);
+          const key = decodePublicKey(parsed.keyB64, parsed.algorithm);
+          next.set(did, {
+            agentDid: did,
+            algorithm: parsed.algorithm,
+            publicKey: key,
+            rawB64: parsed.keyB64,
+            validFromSec: parsed.validFromSec,
+            validUntilSec: parsed.validUntilSec,
+          });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           this.logger.warn(
@@ -79,12 +113,34 @@ export class PinnedKeysService implements OnModuleInit {
     }
     this.keys = next;
     this.logger.log(`Loaded ${this.keys.size} pinned key(s)`);
+    return this.keys.size;
   }
 
-  get(agentDid: string): PinnedKey | undefined {
-    return this.keys.get(agentDid);
+  /**
+   * Lookup a pinned key. Returns `undefined` when:
+   * - no entry exists for `agentDid`, OR
+   * - an entry exists but `nowMs` is outside its validity window.
+   *
+   * In the second case the dispatch in `TokenIssuer.completeChallenge`
+   * falls through to did:web resolution, so a key staged in advance
+   * (validFrom in the future) or post-expiry (validUntil in the past)
+   * is treated identically to "not pinned" — exactly the behavior the
+   * deferred plan §2 specifies.
+   */
+  get(agentDid: string, nowMs: number = Date.now()): PinnedKey | undefined {
+    const key = this.keys.get(agentDid);
+    if (!key) return undefined;
+    const nowSec = Math.floor(nowMs / 1000);
+    if (key.validFromSec !== undefined && nowSec < key.validFromSec) {
+      return undefined;
+    }
+    if (key.validUntilSec !== undefined && nowSec >= key.validUntilSec) {
+      return undefined;
+    }
+    return key;
   }
 
+  /** Total entries currently in the directory (including windowed ones). */
   size(): number {
     return this.keys.size;
   }
@@ -95,27 +151,74 @@ const SUPPORTED_ALGS: ReadonlySet<PinnedAlgorithm> = new Set([
   'ecdsa-p256',
 ]);
 
-/**
- * Parse `key[:algorithm]`. We anchor on a known algorithm suffix
- * rather than splitting on the last `:` because Ed25519 base64 keys
- * may contain a `:` is — well, they actually don't in standard
- * base64, but anchoring on the suffix is the safest interpretation
- * if future algorithm tags get more complex.
- */
-function splitKeyAndAlgorithm(rhs: string): {
+interface ParsedEntry {
   keyB64: string;
   algorithm: PinnedAlgorithm;
-} {
+  validFromSec?: number;
+  validUntilSec?: number;
+}
+
+/**
+ * Parse `key[:algorithm][:from..until]`.
+ *
+ * The window is matched first (anchored at end via regex) so the
+ * algorithm-tag peel below sees a clean `key:algo` shape. Base64 keys
+ * contain only `A-Za-z0-9+/=` — no `:` — so the suffix peel is
+ * unambiguous.
+ */
+export function parseKeyEntry(rhs: string): ParsedEntry {
+  let body = rhs;
+  let validFromSec: number | undefined;
+  let validUntilSec: number | undefined;
+  let algorithm: PinnedAlgorithm = 'ed25519';
+
+  // Peel optional window. Format: `:<from>..<until>` — either bound
+  // may be empty but not both (`:..` alone is rejected as a typo).
+  const windowMatch = body.match(/:(\d*)\.\.(\d*)$/);
+  if (windowMatch) {
+    const [full, fromStr, untilStr] = windowMatch;
+    if (fromStr === '' && untilStr === '') {
+      throw new Error(
+        `pinned-key window ':..' must specify at least one bound`,
+      );
+    }
+    if (fromStr !== '') {
+      const n = Number(fromStr);
+      if (!Number.isInteger(n) || n < 0) {
+        throw new Error(`invalid validFrom in window: '${fromStr}'`);
+      }
+      validFromSec = n;
+    }
+    if (untilStr !== '') {
+      const n = Number(untilStr);
+      if (!Number.isInteger(n) || n < 0) {
+        throw new Error(`invalid validUntil in window: '${untilStr}'`);
+      }
+      validUntilSec = n;
+    }
+    if (
+      validFromSec !== undefined &&
+      validUntilSec !== undefined &&
+      validFromSec >= validUntilSec
+    ) {
+      throw new Error(
+        `invalid window: validFrom (${validFromSec}) >= validUntil (${validUntilSec})`,
+      );
+    }
+    body = body.slice(0, body.length - full.length);
+  }
+
+  // Peel optional algorithm tag (same approach the original parser used).
   for (const alg of SUPPORTED_ALGS) {
     const suffix = `:${alg}`;
-    if (rhs.endsWith(suffix)) {
-      return {
-        keyB64: rhs.slice(0, rhs.length - suffix.length).trim(),
-        algorithm: alg,
-      };
+    if (body.endsWith(suffix)) {
+      algorithm = alg;
+      body = body.slice(0, body.length - suffix.length);
+      break;
     }
   }
-  return { keyB64: rhs, algorithm: 'ed25519' };
+
+  return { keyB64: body.trim(), algorithm, validFromSec, validUntilSec };
 }
 
 function decodePublicKey(b64: string, alg: PinnedAlgorithm): KeyObject {

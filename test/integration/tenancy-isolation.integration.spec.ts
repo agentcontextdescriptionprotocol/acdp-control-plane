@@ -60,7 +60,11 @@ describe('Cross-tenant isolation (integration)', () => {
       event_ts: new Date().toISOString(),
     };
     return client.requestRaw('POST', '/ingest/acdp', {
-      body: JSON.stringify(body),
+      // Pass the object directly — requestRaw JSON-stringifies it once.
+      // Passing a pre-stringified string here double-encodes the body, so
+      // the server parses a JSON string literal (not an object) and ingest
+      // rejects it with 400 "Payload must be an object".
+      body,
       headers: {
         'X-ACDP-Event': 'context_published',
         'X-Tenant-Id': tenantId,
