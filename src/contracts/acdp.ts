@@ -79,12 +79,24 @@ export interface AcdpWebhookEvent {
   at?: string;
   /**
    * ACDP 0.3.0 lifecycle: DID of the party performing a retract/republish
-   * (the producer for endpoint-submitted lifecycle events). NOTE: on
-   * retract/republish events the flattened wire body's `event_id` is the
-   * actor-minted lifecycle event id (RFC 9562 UUID) — still retry-stable, so
-   * it remains a valid dedup fallback when `X-ACDP-Event-Id` is absent.
+   * (the producer for endpoint-submitted lifecycle events).
    */
   actor?: string;
+  /**
+   * ACDP 0.3.0 lifecycle: the ACTOR-minted lifecycle event id (RFC 9562 UUID)
+   * from the signed event, carried only on retract/republish. Provenance only
+   * — use it to correlate a delivery with the signed lifecycle event and with
+   * `registry_state.lifecycle_events`, NEVER as a dedup key.
+   *
+   * Wire-change note (acdp-registry-rs#183, control-plane#139): these two
+   * event types previously serialised the actor-minted id under `event_id`,
+   * duplicating the envelope's key — last-wins parsers (JSON.parse included)
+   * resolved body `event_id` to the lifecycle id and shadowed the per-delivery
+   * id. The actor-minted id now has this dedicated key, and body `event_id` is
+   * the per-delivery id on all five event types, identical to
+   * `X-ACDP-Event-Id`. Keying dedup here would re-open exactly that divergence.
+   */
+  lifecycle_event_id?: string;
   /** ACDP 0.3.0 lifecycle: optional human-readable explanation from the signed event. */
   reason?: string;
   /**
