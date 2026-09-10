@@ -238,3 +238,13 @@ single logical event.
 
 Lineage edges are additionally deduplicated at the DB level (unique on the
 tenant-scoped `(from_ctx_id, to_ctx_id)` key).
+
+> **Header-stripped fallback, lifecycle events.** Body `event_id` is the
+> per-delivery id on all five event types (identical to `X-ACDP-Event-Id`); the
+> actor-minted lifecycle id travels separately as `lifecycle_event_id` and is
+> provenance, never a dedup key. So if a deployment strips `X-ACDP-Event-Id`, a
+> producer's idempotent resubmit of a byte-identical signed retract/republish
+> arrives as two deliveries with distinct ids and does **not** collapse — one
+> extra event row, SSE emit, and outbound webhook. The lifecycle projection is
+> unaffected (re-applying a transition is a no-op). Keep the header to collapse
+> it.
